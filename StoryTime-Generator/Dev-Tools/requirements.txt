@@ -1,0 +1,5 @@
+# Dev-Tools requirements
+# Utilities for monitoring and managing the StoryTime Generator
+
+requests>=2.31.0
+python-dotenv>=1.0.0
