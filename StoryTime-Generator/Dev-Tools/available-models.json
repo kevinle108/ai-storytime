@@ -1,0 +1,138 @@
+[
+    {
+        "id": "azureml://registries/azureml-cohere/models/Cohere-embed-v3-english/versions/3",
+        "name": "Cohere-embed-v3-english",
+        "friendly_name": "Cohere Embed v3 English",
+        "model_version": 3,
+        "publisher": "cohere",
+        "model_family": "cohere",
+        "model_registry": "azureml-cohere",
+        "license": "custom",
+        "task": "embeddings",
+        "description": "Cohere Embed English is the market's leading text representation model used for semantic search, retrieval-augmented generation (RAG), classification, and clustering. Embed English has top performance on the HuggingFace MTEB benchmark and performs well on a variety of industries such as Finance, Legal, and General-Purpose Corpora.The model was trained on nearly 1B English training pairs. For full details of this model, [release blog post](https://aka.ms/cohere-blog).",
+        "summary": "Cohere Embed English is the market's leading text representation model used for semantic search, retrieval-augmented generation (RAG), classification, and clustering.",
+        "tags": [
+            "RAG",
+            "search"
+        ]
+    },
+    {
+        "id": "azureml://registries/azureml-cohere/models/Cohere-embed-v3-multilingual/versions/3",
+        "name": "Cohere-embed-v3-multilingual",
+        "friendly_name": "Cohere Embed v3 Multilingual",
+        "model_version": 3,
+        "publisher": "cohere",
+        "model_family": "cohere",
+        "model_registry": "azureml-cohere",
+        "license": "custom",
+        "task": "embeddings",
+        "description": "Cohere Embed Multilingual is the market's leading text representation model used for semantic search, retrieval-augmented generation (RAG), classification, and clustering. Embed Multilingual supports 100+ languages and can be used to search within a language (e.g., search with a French query on French documents) and across languages (e.g., search with an English query on Chinese documents). This model was trained on nearly 1B English training pairs and nearly 0.5B Non-English training pairs from 100+ languages. For full details of this model, [release blog post](https://aka.ms/cohere-blog).",
+        "summary": "Supporting over 100 languages, Cohere Embed Multilingual is the market's leading text representation model used for semantic search, retrieval-augmented generation (RAG), classification, and clustering.",
+        "tags": [
+            "RAG",
+            "search"
+        ]
+    },
+    {
+        "id": "azureml://registries/azureml-meta/models/Meta-Llama-3.1-405B-Instruct/versions/1",
+        "name": "Meta-Llama-3.1-405B-Instruct",
+        "friendly_name": "Meta-Llama-3.1-405B-Instruct",
+        "model_version": 1,
+        "publisher": "meta",
+        "model_family": "meta",
+        "model_registry": "azureml-meta",
+        "license": "custom",
+        "task": "chat-completion",
+        "description": "The Meta Llama 3.1 collection of multilingual large language models (LLMs) is a collection of pretrained and instruction tuned\ngenerative models in 8B, 70B and 405B sizes (text in/text out). The Llama 3.1 instruction tuned text only models (8B, 70B, 405B) are optimized for multilingual dialogue use cases and outperform many of the available open source and closed chat models on\ncommon industry benchmarks.\n\n## Model Architecture\n\nLlama 3.1 is an auto-regressive language model that uses an optimized transformer architecture. The tuned versions use supervised fine-tuning (SFT) and reinforcement learning with human feedback (RLHF) to align with human preferences for helpfulness and safety.\n\n## Training Datasets\n\n**Overview:** Llama 3.1 was pretrained on ~15 trillion tokens of data from publicly available sources. The fine-tuning data includes publicly available instruction datasets, as well as over 25M synthetically generated examples.\n\n**Data Freshness:** The pretraining data has a cutoff of December 2023.\n",
+        "summary": "The Llama 3.1 instruction tuned text only models are optimized for multilingual dialogue use cases and outperform many of the available open source and closed chat models on common industry benchmarks.",
+        "tags": [
+            "conversation"
+        ]
+    },
+    {
+        "id": "azureml://registries/azureml-meta/models/Meta-Llama-3.1-8B-Instruct/versions/1",
+        "name": "Meta-Llama-3.1-8B-Instruct",
+        "friendly_name": "Meta-Llama-3.1-8B-Instruct",
+        "model_version": 1,
+        "publisher": "meta",
+        "model_family": "meta",
+        "model_registry": "azureml-meta",
+        "license": "custom",
+        "task": "chat-completion",
+        "description": "The Meta Llama 3.1 collection of multilingual large language models (LLMs) is a collection of pretrained and instruction tuned\ngenerative models in 8B, 70B and 405B sizes (text in/text out). The Llama 3.1 instruction tuned text only models (8B, 70B, 405B) are optimized for multilingual dialogue use cases and outperform many of the available open source and closed chat models on\ncommon industry benchmarks.\n\n## Model Architecture\n\nLlama 3.1 is an auto-regressive language model that uses an optimized transformer architecture. The tuned versions use supervised fine-tuning (SFT) and reinforcement learning with human feedback (RLHF) to align with human preferences for helpfulness and safety.\n\n## Training Datasets\n\n**Overview:** Llama 3.1 was pretrained on ~15 trillion tokens of data from publicly available sources. The fine-tuning data includes publicly available instruction datasets, as well as over 25M synthetically generated examples.\n\n**Data Freshness:** The pretraining data has a cutoff of December 2023.\n",
+        "summary": "The Llama 3.1 instruction tuned text only models are optimized for multilingual dialogue use cases and outperform many of the available open source and closed chat models on common industry benchmarks.",
+        "tags": [
+            "conversation"
+        ]
+    },
+    {
+        "id": "azureml://registries/azure-openai/models/gpt-4o/versions/2",
+        "name": "gpt-4o",
+        "friendly_name": "OpenAI GPT-4o",
+        "model_version": 2,
+        "publisher": "Azure OpenAI Service",
+        "model_family": "openai",
+        "model_registry": "azure-openai",
+        "license": "custom",
+        "task": "chat-completion",
+        "description": "GPT-4o offers a shift in how AI models interact with multimodal inputs. By seamlessly combining text, images, and audio, GPT-4o provides a richer, more engaging user experience.\n\nMatching the intelligence of GPT-4 Turbo, it is remarkably more efficient, delivering text at twice the speed and at half the cost. Additionally, GPT-4o exhibits the highest vision performance and excels in non-English languages compared to previous OpenAI models.\n\nGPT-4o is engineered for speed and efficiency. Its advanced ability to handle complex queries with minimal resources can translate into cost savings and performance.\n\nThe introduction of GPT-4o opens numerous possibilities for businesses in various sectors: \n\n1. **Enhanced customer service**: By integrating diverse data inputs, GPT-4o enables more dynamic and comprehensive customer support interactions.\n2. **Advanced analytics**: Leverage GPT-4o's capability to process and analyze different types of data to enhance decision-making and uncover deeper insights.\n3. **Content innovation**: Use GPT-4o's generative capabilities to create engaging and diverse content formats, catering to a broad range of consumer preferences.\n\n## Resources\n\n- [\"Hello GPT-4o\" (OpenAI announcement)](https://openai.com/index/hello-gpt-4o/)\n- [Introducing GPT-4o: OpenAI's new flagship multimodal model now in preview on Azure](https://azure.microsoft.com/en-us/blog/introducing-gpt-4o-openais-new-flagship-multimodal-model-now-in-preview-on-azure/)\n",
+        "summary": "OpenAI's most advanced multimodal model in the GPT-4 family. Can handle both text and image inputs.",
+        "tags": [
+            "multipurpose",
+            "multilingual",
+            "multimodal"
+        ]
+    },
+    {
+        "id": "azureml://registries/azure-openai/models/gpt-4o-mini/versions/1",
+        "name": "gpt-4o-mini",
+        "friendly_name": "OpenAI GPT-4o mini",
+        "model_version": 1,
+        "publisher": "Azure OpenAI Service",
+        "model_family": "OpenAI",
+        "model_registry": "azure-openai",
+        "license": "custom",
+        "task": "chat-completion",
+        "description": "GPT-4o mini enables a broad range of tasks with its low cost and latency, such as applications that chain or parallelize multiple model calls (e.g., calling multiple APIs), pass a large volume of context to the model (e.g., full code base or conversation history), or interact with customers through fast, real-time text responses (e.g., customer support chatbots).\n\nToday, GPT-4o mini supports text and vision in the API, with support for text, image, video and audio inputs and outputs coming in the future. The model has a context window of 128K tokens and knowledge up to October 2023. Thanks to the improved tokenizer shared with GPT-4o, handling non-English text is now even more cost effective.\n\nGPT-4o mini surpasses GPT-3.5 Turbo and other small models on academic benchmarks across both textual intelligence and multimodal reasoning, and supports the same range of languages as GPT-4o. It also demonstrates strong performance in function calling, which can enable developers to build applications that fetch data or take actions with external systems, and improved long-context performance compared to GPT-3.5 Turbo.\n\n## Resources\n\n- [OpenAI announcement](https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/)\n",
+        "summary": "An affordable, efficient AI solution for diverse text and image tasks.",
+        "tags": [
+            "multipurpose",
+            "multilingual",
+            "multimodal"
+        ]
+    },
+    {
+        "id": "azureml://registries/azure-openai/models/text-embedding-3-large/versions/1",
+        "name": "text-embedding-3-large",
+        "friendly_name": "OpenAI Text Embedding 3 (large)",
+        "model_version": 1,
+        "publisher": "Azure OpenAI Service",
+        "model_family": "openai",
+        "model_registry": "azure-openai",
+        "license": "custom",
+        "task": "embeddings",
+        "description": "Text-embedding-3 series models are the latest and most capable embedding model. The text-embedding-3 models offer better average multi-language retrieval performance with the MIRACL benchmark while still maintaining performance for English tasks with the MTEB benchmark.",
+        "summary": "Text-embedding-3 series models are the latest and most capable embedding model from OpenAI.",
+        "tags": [
+            "RAG",
+            "search"
+        ]
+    },
+    {
+        "id": "azureml://registries/azure-openai/models/text-embedding-3-small/versions/1",
+        "name": "text-embedding-3-small",
+        "friendly_name": "OpenAI Text Embedding 3 (small)",
+        "model_version": 1,
+        "publisher": "Azure OpenAI Service",
+        "model_family": "openai",
+        "model_registry": "azure-openai",
+        "license": "custom",
+        "task": "embeddings",
+        "description": "Text-embedding-3 series models are the latest and most capable embedding model. The text-embedding-3 models offer better average multi-language retrieval performance with the MIRACL benchmark while still maintaining performance for English tasks with the MTEB benchmark.",
+        "summary": "Text-embedding-3 series models are the latest and most capable embedding model from OpenAI.",
+        "tags": [
+            "RAG",
+            "search"
+        ]
+    }
+]
