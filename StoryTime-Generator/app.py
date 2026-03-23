@@ -1,13 +1,13 @@
 """
-Children's Story Time Generator - Main Application
+Children's Story Book Generator - Main Application
 
-A multi-agent AI system that generates engaging, age-appropriate children's stories
+A multi-agent AI system that generates illustrated children's picture books
 using LangChain and LangGraph with GitHub Models API.
 
 Agents:
-- Story Planner: Creates story outlines
-- Story Writer: Writes narrative based on outline
-- Story Validator: Reviews and approves/requests revision
+- Story Generator: Creates rhyming stories with short sentences
+- Paginator: Breaks story into 5-10 pages with visual focus notes
+- Illustration Briefer: Creates detailed scene descriptions for illustrators
 """
 
 import os
@@ -42,9 +42,9 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 # Global variables for agents (will be set in main)
-planner_agent = None
-writer_agent = None
-validator_agent = None
+story_generator_agent = None
+paginator_agent = None
+illustration_briefer_agent = None
 
 # Validate GitHub Token
 if not GITHUB_TOKEN or GITHUB_TOKEN == "your_github_token_here":
@@ -57,161 +57,167 @@ if not GITHUB_TOKEN or GITHUB_TOKEN == "your_github_token_here":
 # ============================================================================
 
 class State(TypedDict):
-    """State container for story generation workflow"""
+    """State container for story book generation workflow"""
     messages: Annotated[list, add_messages]
-    story_outline: str
-    story_narrative: str
-    validation_status: str
-    revision_count: int
+    story_text: str
+    pages: list  # List of dicts with page_number, story_text, visual_focus
+    illustration_briefs: list  # List of dicts with page_number and brief
 
 
 # ============================================================================
 # Agent Node Functions
 # ============================================================================
 
-async def planner_node(state: State) -> Command[Literal["writer", "__end__"]]:
+# ============================================================================
+# Agent Node Functions
+# ============================================================================
+
+async def story_generator_node(state: State) -> Command[Literal["paginator", "__end__"]]:
     """
-    Story Planner Agent - Creates story outline from user input
+    Story Generator Agent - Creates rhyming story with short sentences
     
     Expected to generate:
-    - Story title
-    - Target age group
-    - Main characters
-    - Plot outline
-    - Learning lesson/moral
-    - Tone recommendations
+    - Story 300-400 words
+    - Simple sentences (3-8 words)
+    - AABB rhyme scheme
+    - Age-appropriate content
+    - Clear beginning-middle-end structure
     """
-    print("\n📋 [PLANNER] Processing story outline request...")
+    print("\n📖 [STORY GENERATOR] Creating rhyming story...")
     
-    if not planner_agent:
-        print("   ⚠️  Planner agent not initialized")
-        return Command(update={"messages": state["messages"]}, goto="writer")
+    if not story_generator_agent:
+        print("   ⚠️  Story generator agent not initialized")
+        return Command(update={"messages": state["messages"]}, goto="__end__")
     
-    # Call planner agent
-    response = await planner_agent.ainvoke({"messages": state["messages"]})
+    # Call story generator agent
+    response = await story_generator_agent.ainvoke({"messages": state["messages"]})
     
-    # Extract and display planner output
-    planner_response = response["messages"][-1]
-    print(f"\n   ✓ Story outline created")
-    print(f"   Preview: {planner_response.content[:100]}...")
+    # Extract and display generator output
+    generator_response = response["messages"][-1]
+    print(f"\n   ✓ Story generated")
+    print(f"   Story length: {len(generator_response.content)} characters")
+    print(f"   Preview: {generator_response.content[:100]}...")
     
-    # Route to writer with outline in state
+    # Route to paginator with story in state
     return Command(
         update={
             "messages": response["messages"],
-            "story_outline": planner_response.content
+            "story_text": generator_response.content
         },
-        goto="writer"
+        goto="paginator"
     )
 
 
-async def writer_node(state: State) -> Command[Literal["validator", "__end__"]]:
+async def paginator_node(state: State) -> Command[Literal["illustration_briefer", "__end__"]]:
     """
-    Story Writer Agent - Generates narrative based on outline
+    Paginator Agent - Breaks story into 5-10 pages with visual notes
     
     Expected to generate:
-    - Age-appropriate language
-    - Engaging dialogue
-    - Sensory descriptions
-    - Complete story arc
+    - JSON array of pages
+    - Each page: page_number, story_text, visual_focus
+    - Logical scene breaks
+    - Balanced page lengths
     """
-    print("\n✍️  [WRITER] Generating story narrative...")
+    print("\n📄 [PAGINATOR] Breaking story into pages...")
     
-    if not writer_agent:
-        print("   ⚠️  Writer agent not initialized")
-        return Command(update={"messages": state["messages"]}, goto="validator")
+    if not paginator_agent:
+        print("   ⚠️  Paginator agent not initialized")
+        return Command(update={"messages": state["messages"]}, goto="illustration_briefer")
     
-    if not state["story_outline"]:
-        print("   ⚠️  No outline available")
-        return Command(update={"messages": state["messages"]}, goto="validator")
+    if not state["story_text"]:
+        print("   ⚠️  No story available")
+        return Command(update={"messages": state["messages"]}, goto="illustration_briefer")
     
-    # Prepare context by adding the outline to the prompt
-    print(f"   Using outline: {state['story_outline'][:50]}...")
+    # Add story context to the messages
+    messages_with_story = state["messages"] + [
+        HumanMessage(content=f"Here is the story to paginate:\n\n{state['story_text']}")
+    ]
     
-    # Call writer agent
-    response = await writer_agent.ainvoke({"messages": state["messages"]})
+    print(f"   Paginating story...")
     
-    # Extract and display writer output
-    writer_response = response["messages"][-1]
-    print(f"\n   ✓ Story narrative generated")
-    print(f"   Story length: {len(writer_response.content)} characters")
+    # Call paginator agent
+    response = await paginator_agent.ainvoke({"messages": messages_with_story})
     
-    # Route to validator with narrative in state
+    # Extract paginator output
+    paginator_response = response["messages"][-1]
+    
+    # Parse JSON response
+    try:
+        import json
+        pages = json.loads(paginator_response.content)
+        print(f"\n   ✓ Story paginated into {len(pages)} pages")
+        for page in pages:
+            print(f"   • Page {page['page_number']}: {len(page['story_text'])} chars - Focus: {page['visual_focus'][:40]}...")
+    except json.JSONDecodeError:
+        print(f"   ⚠️  Failed to parse page JSON, attempting recovery...")
+        pages = []
+    
+    # Route to illustration briefer with pages in state
     return Command(
         update={
             "messages": response["messages"],
-            "story_narrative": writer_response.content
+            "pages": pages
         },
-        goto="validator"
+        goto="illustration_briefer"
     )
 
 
-async def validator_node(state: State) -> Command[Literal["writer", "__end__"]]:
+async def illustration_briefer_node(state: State) -> Command[Literal["__end__"]]:
     """
-    Story Validator Agent - Reviews story for quality and age-appropriateness
+    Illustration Briefer Agent - Creates scene descriptions for each page
     
-    Returns:
-    - APPROVED: Story is ready → route to END
-    - REVISION NEEDED: Route back to writer with feedback
+    Expected to generate for each page:
+    - [SETTING] description
+    - [CHARACTERS] positioning and expressions
+    - [KEY ELEMENTS] visual items
+    - [COLOR PALETTE] suggested colors
+    - [STYLE] artistic recommendations
     """
-    print("\n✅ [VALIDATOR] Reviewing story...")
+    print("\n🎨 [ILLUSTRATION BRIEFER] Creating illustration briefs...")
     
-    if not validator_agent:
-        print("   ⚠️  Validator agent not initialized")
+    if not illustration_briefer_agent:
+        print("   ⚠️  Illustration briefer agent not initialized")
         return Command(update={"messages": state["messages"]}, goto="__end__")
     
-    if not state["story_narrative"]:
-        print("   ⚠️  No story to validate")
+    if not state["pages"]:
+        print("   ⚠️  No pages available")
         return Command(update={"messages": state["messages"]}, goto="__end__")
     
-    print(f"   Reviewing story: {state['story_narrative'][:50]}...")
+    print(f"   Creating briefs for {len(state['pages'])} pages...")
     
-    # Track revision attempts to prevent infinite loops
-    if state["revision_count"] >= 2:
-        print("   ⚠️  Max revision attempts reached, approving story")
-        state["validation_status"] = "APPROVED (Max revisions)"
-        state["messages"] = state["messages"] + [
-            AIMessage(content="Story approved after revision attempts")
-        ]
-        return Command(
-            update={"messages": state["messages"], "revision_count": state["revision_count"]},
-            goto="__end__"
-        )
+    illustration_briefs = []
     
-    # Call validator agent
-    response = await validator_agent.ainvoke({"messages": state["messages"]})
+    # Generate brief for each page
+    for page in state["pages"]:
+        page_num = page.get("page_number", "?")
+        story_text = page.get("story_text", "")
+        visual_focus = page.get("visual_focus", "")
+        
+        # Prepare context for briefer
+        brief_prompt = f"Story text: {story_text}\n\nVisual focus: {visual_focus}"
+        messages_for_brief = [HumanMessage(content=brief_prompt)]
+        
+        # Generate brief
+        brief_response = await illustration_briefer_agent.ainvoke({"messages": messages_for_brief})
+        brief_text = brief_response["messages"][-1].content
+        
+        illustration_briefs.append({
+            "page_number": page_num,
+            "brief": brief_text
+        })
+        
+        print(f"   ✓ Brief created for page {page_num}")
     
-    # Extract validator feedback
-    validator_response = response["messages"][-1]
-    feedback = validator_response.content
+    print(f"\n   ✓ All {len(illustration_briefs)} illustration briefs generated")
     
-    print(f"\n   Validator Feedback:")
-    print(f"   {feedback[:200]}...")
-    
-    # Check if story is approved or needs revision
-    if "APPROVED" in feedback.upper():
-        print("\n   ✓ Story APPROVED")
-        print("   → Routing to END")
-        return Command(
-            update={
-                "messages": response["messages"],
-                "validation_status": "APPROVED"
-            },
-            goto="__end__"
-        )
-    else:
-        # Request revision - loop back to writer
-        new_revision_count = state["revision_count"] + 1
-        print(f"\n   ⚠️  Story needs revision (Attempt {new_revision_count})")
-        print("   → Routing back to WRITER")
-        return Command(
-            update={
-                "messages": response["messages"],
-                "revision_count": new_revision_count,
-                "validation_status": f"REVISION NEEDED (Attempt {new_revision_count})"
-            },
-            goto="writer"
-        )
+    # Route to END
+    return Command(
+        update={
+            "messages": state["messages"],
+            "illustration_briefs": illustration_briefs
+        },
+        goto="__end__"
+    )
 
 
 # ============================================================================
@@ -219,7 +225,7 @@ async def validator_node(state: State) -> Command[Literal["writer", "__end__"]]:
 # ============================================================================
 
 def build_workflow():
-    """Construct the StateGraph for story generation workflow"""
+    """Construct the StateGraph for story book generation workflow"""
     
     print("\n🔨 Building workflow graph...")
     
@@ -227,15 +233,15 @@ def build_workflow():
     workflow = StateGraph(State)
     
     # Add nodes
-    workflow.add_node("planner", planner_node)
-    workflow.add_node("writer", writer_node)
-    workflow.add_node("validator", validator_node)
+    workflow.add_node("story_generator", story_generator_node)
+    workflow.add_node("paginator", paginator_node)
+    workflow.add_node("illustration_briefer", illustration_briefer_node)
     
     # Set entry point
-    workflow.add_edge(START, "planner")
+    workflow.add_edge(START, "story_generator")
     
     print("   ✓ Workflow graph created")
-    print("   ✓ Nodes: [planner → writer → validator ⇄ (revision loop) → END]")
+    print("   ✓ Nodes: [story_generator → paginator → illustration_briefer → END]")
     
     # Compile the graph
     graph = workflow.compile()
@@ -246,32 +252,56 @@ def build_workflow():
 # Output Management
 # ============================================================================
 
-def save_story(title: str, story: str, metadata: dict) -> Path:
-    """Save generated story to markdown file"""
+def save_story(title: str, story_data: dict, metadata: dict) -> Path:
+    """Save generated story book with pages and illustration briefs"""
     
     OUTPUT_DIR.mkdir(exist_ok=True)
     
     # Create filename from title
-    filename = f"story_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    filename = f"book_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     filepath = OUTPUT_DIR / filename
     
-    # Format story with metadata
+    # Extract data
+    story_text = story_data.get("story_text", "")
+    pages = story_data.get("pages", [])
+    illustration_briefs = story_data.get("illustration_briefs", [])
+    
+    # Build content
     content = f"""# {title}
 
 ## Metadata
 - **Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- **Age Group**: {metadata.get('age_group', 'Not specified')}
+- **Target Age Group**: {metadata.get('age_group', 'Not specified')}
 - **Theme**: {metadata.get('theme', 'Not specified')}
-- **Lesson**: {metadata.get('lesson', 'Not specified')}
+- **Total Pages**: {len(pages)}
 
-## Story
+## Full Story
 
-{story}
+{story_text}
+
+---
+
+## Pages & Illustrations
+
 """
     
-    # Save with UTF-8 encoding to preserve special characters
+    # Add each page with its illustration brief
+    for page in pages:
+        page_num = page.get("page_number", "?")
+        page_text = page.get("story_text", "")
+        
+        content += f"\n### Page {page_num}\n\n**Story Text:**\n\n{page_text}\n\n"
+        
+        # Find corresponding illustration brief
+        brief_data = next((b for b in illustration_briefs if b.get("page_number") == page_num), None)
+        if brief_data:
+            content += f"**Illustration Brief:**\n\n{brief_data['brief']}\n\n"
+        
+        content += "---\n"
+    
+    # Save with UTF-8 encoding
     filepath.write_text(content, encoding='utf-8')
-    print(f"\n💾 Story saved to: {filepath}")
+    print(f"\n💾 Story book saved to: {filepath}")
     return filepath
 
 
@@ -283,44 +313,45 @@ def collect_user_input() -> dict:
     """Collect story requirements from user"""
     
     print("\n" + "=" * 60)
-    print("🎨 Children's Story Time Generator")
+    print("📚 Children's Story Book Generator")
     print("=" * 60)
     
-    print("\nLet's create a story! Please provide the following information:\n")
+    print("\nLet's create an illustrated children's story book!")
+    print("(We'll generate a rhyming story, break it into pages,")
+    print("and create illustration briefs for each page.)\n")
     
-    theme = input("📚 Story Theme/Topic: ").strip()
+    theme = input("📖 Story Theme/Topic: ").strip()
     if not theme:
         theme = "A magical adventure"
     
-    print("\nAge Group:")
+    print("\nTarget Age Group:")
+    print("  0) Under 3 years (Toddler/Infant)")
     print("  1) 3-5 years (Preschool)")
     print("  2) 6-8 years (Early Elementary)")
     print("  3) 9-12 years (Middle Elementary)")
     
-    age_choice = input("Select age group (1-3) [default: 1]: ").strip() or "1"
+    age_choice = input("Select age group (0-3) [default: 0]: ").strip() or "0"
     age_map = {
+        "0": "Under 3 years",
         "1": "3-5 years",
         "2": "6-8 years",
         "3": "9-12 years"
     }
     age_group = age_map.get(age_choice, "3-5 years")
     
-    lesson = input("\n💡 Learning Lesson/Moral (optional, press Enter to skip): ").strip()
-    
-    length = input("\n📏 Story Length (short/medium/long) [default: medium]: ").strip().lower() or "medium"
+    # Create the user input prompt for story generation
+    user_input = f"Please create a children's picture book story about: {theme}. Target age group: {age_group}. The story should have simple sentences with rhyming patterns and be suitable for illustration."
     
     return {
         "theme": theme,
         "age_group": age_group,
-        "lesson": lesson or "Not specified",
-        "length": length,
-        "user_input": f"Please create a {length} children's story about: {theme}. Target age group: {age_group}. Learning lesson: {lesson or 'Not specified'}"
+        "user_input": user_input
     }
 
 
 async def main():
     """Main application entry point"""
-    global planner_agent, writer_agent, validator_agent
+    global story_generator_agent, paginator_agent, illustration_briefer_agent
     
     # Ensure UTF-8 encoding for console output on Windows
     try:
@@ -332,7 +363,7 @@ async def main():
     except Exception:
         pass
     
-    print("\n🚀 Initializing Story Time Generator...")
+    print("\n🚀 Initializing Story Book Generator...")
     
     # Check configuration
     if not GITHUB_TOKEN or GITHUB_TOKEN == "your_github_token_here":
@@ -356,17 +387,17 @@ async def main():
     # Load prompts from templates
     print("   Loading agent prompts...")
     try:
-        with open(TEMPLATES_DIR / "planner.json", "r") as f:
-            planner_data = json.load(f)
-            planner_prompt = planner_data.get("template", "You are a story planner.")
+        with open(TEMPLATES_DIR / "story_generator.json", "r") as f:
+            generator_data = json.load(f)
+            generator_prompt = generator_data.get("template", "You are a story generator.")
         
-        with open(TEMPLATES_DIR / "writer.json", "r") as f:
-            writer_data = json.load(f)
-            writer_prompt = writer_data.get("template", "You are a story writer.")
+        with open(TEMPLATES_DIR / "paginator.json", "r") as f:
+            paginator_data = json.load(f)
+            paginator_prompt = paginator_data.get("template", "You are a paginator.")
         
-        with open(TEMPLATES_DIR / "validator.json", "r") as f:
-            validator_data = json.load(f)
-            validator_prompt = validator_data.get("template", "You are a story validator.")
+        with open(TEMPLATES_DIR / "illustration_briefer.json", "r") as f:
+            briefer_data = json.load(f)
+            briefer_prompt = briefer_data.get("template", "You are an illustration briefer.")
         
         print("   ✓ Prompts loaded")
     except FileNotFoundError as e:
@@ -376,9 +407,9 @@ async def main():
     
     # Create agents
     print("   Creating agents...")
-    planner_agent = create_agent(llm, tools=[], system_prompt=planner_prompt)
-    writer_agent = create_agent(llm, tools=[], system_prompt=writer_prompt)
-    validator_agent = create_agent(llm, tools=[], system_prompt=validator_prompt)
+    story_generator_agent = create_agent(llm, tools=[], system_prompt=generator_prompt)
+    paginator_agent = create_agent(llm, tools=[], system_prompt=paginator_prompt)
+    illustration_briefer_agent = create_agent(llm, tools=[], system_prompt=briefer_prompt)
     print("   ✓ All agents created")
     
     # Collect user input
@@ -387,67 +418,42 @@ async def main():
     # Initialize state
     initial_state = {
         "messages": [HumanMessage(content=user_data["user_input"])],
-        "story_outline": "",
-        "story_narrative": "",
-        "validation_status": "",
-        "revision_count": 0,
+        "story_text": "",
+        "pages": [],
+        "illustration_briefs": [],
     }
     
     # Build and run workflow
     print("\n" + "=" * 60)
-    print("🎬 Starting Story Generation Workflow")
+    print("🎬 Starting Story Book Generation Workflow")
     print("=" * 60)
     
-    workflow = build_workflow()
+    graph = build_workflow()
     
-    print("\n🔄 Running workflow...\n")
-    final_state = await workflow.ainvoke(initial_state)
+    # Run the workflow
+    result = await graph.ainvoke(initial_state)
     
-    # Display results
     print("\n" + "=" * 60)
-    print("📖 Story Generation Complete!")
+    print("✨ Story Book Generation Complete!")
     print("=" * 60)
     
-    print(f"\n✓ Outline:\n{final_state['story_outline'][:300]}...")
-    print(f"\n✓ Narrative:\n{final_state['story_narrative'][:500]}...")
-    print(f"\n✓ Status: {final_state['validation_status']}")
-    
-    # Save story
+    # Save the generated story book
     metadata = {
         "age_group": user_data["age_group"],
         "theme": user_data["theme"],
-        "lesson": user_data["lesson"]
     }
-    save_story(
-        title=user_data["theme"],
-        story=final_state["story_narrative"],
-        metadata=metadata
-    )
-
-    # output full state into a markdown file for debugging
-    debug_filepath = OUTPUT_DIR / f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    debug_content = f"""# Debug Output
-
-    {json.dumps(final_state, indent=4)}
-
-    """
-    with open(debug_filepath, "w") as f:
-        f.write(debug_content)
-    print(f"\n✅ Debug output saved to {debug_filepath}")
-
-    # output the final story into a markdown file
-    story_filepath = OUTPUT_DIR / f"story_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    story_content = f"""# {user_data['theme']}
-## Age Group: {user_data['age_group']}
-## Learning Lesson: {user_data['lesson']}
-{final_state['story_narrative']}
-    """
-    with open(story_filepath, "w") as f:
-        f.write(story_content)
-
-    print(f"\n✅ Story saved to {story_filepath}")
-
-    print("\n✅ Story generation workflow completed!")
+    
+    title = f"{user_data['theme'].title()} - A Picture Book"
+    story_file = save_story(title, result, metadata)
+    
+    print("\n📊 Generation Summary:")
+    print(f"   • Theme: {user_data['theme']}")
+    print(f"   • Target Age: {user_data['age_group']}")
+    print(f"   • Story Pages: {len(result.get('pages', []))}")
+    print(f"   • Illustration Briefs: {len(result.get('illustration_briefs', []))}")
+    print(f"   • Output File: {story_file.name}")
+    
+    print("\n✅ All done! Your illustrated story book is ready.")
 
 
 if __name__ == "__main__":
