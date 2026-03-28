@@ -75,25 +75,31 @@ def normalize_card(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def _hf_image_prompt(card: dict[str, Any]) -> str:
-    """Bias the model toward one clear subject and a calm background—good for toddler vocabulary."""
+    """One clear subject, calm background, and strong anti-text rules (no labels on the image)."""
     en = (card.get("english") or "").strip()
     base = (card.get("image_prompt") or "").strip()
-    subject_bit = f'"{en}"' if en else "the vocabulary word"
+    # Avoid phrases like 'the word "phone"'—they often cause the model to paint the spelling.
     if base:
-        core = f"Illustration for the word {subject_bit}: {base}"
+        core = f"Toddler flashcard, picture only: {base}"
+    elif en:
+        core = f"Toddler flashcard, picture only: {en}"
     else:
-        core = (
-            f"Illustration for the word {subject_bit}: one clear, simple depiction of that word only."
-        )
-    style = (
-        "Show only what the word means—one main subject, centered, large in the frame. "
-        "Plain simple background (soft solid color or very light gradient), no busy scenery, "
-        "no crowds, no clutter, no extra props unless they define the word. "
-        "Flat cartoon style, bold simple shapes, thick clear outlines, bright friendly colors, "
-        "high contrast, easy for a young child to name at a glance. "
-        "No text, no letters, no watermark."
+        core = "Toddler flashcard, picture only: one simple clear subject"
+
+    no_text = (
+        "CRITICAL: The image must contain zero readable text. No words, letters, numbers, "
+        "captions, labels, logos, typography, speech bubbles, street signs, book titles, or UI text. "
+        "Do not spell or write the vocabulary anywhere in the image. "
+        "If you show a phone, tablet, laptop, TV, book, newspaper, or sign, use a blank screen, "
+        "a soft color block, or a simple pattern—never legible characters on surfaces."
     )
-    return f"{core} {style}"
+    style = (
+        "One main subject, centered, large in the frame. "
+        "Plain simple background (soft solid or very light gradient), no busy scenery or clutter. "
+        "Flat cartoon style, bold shapes, thick outlines, bright friendly colors, high contrast. "
+        "No watermark."
+    )
+    return f"{core} {style} {no_text}"
 
 
 def generate_image_files(
