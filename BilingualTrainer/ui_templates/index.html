@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bilingual Flashcard Generator</title>
+  <style>
+    :root {
+      --bg: #fef6eb;
+      --card: #ffffff;
+      --text: #2c2416;
+      --muted: #6b5c4c;
+      --accent: #3d7ea6;
+      --accent-hover: #2f6588;
+      --danger: #b54a3c;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 1.25rem;
+      line-height: 1.45;
+    }
+    .wrap {
+      max-width: 32rem;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 800;
+      margin: 0 0 0.35rem 0;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 0 0 1.25rem 0;
+    }
+    .panel {
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 28px rgba(44, 36, 22, 0.1);
+      padding: 1.25rem 1.35rem;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 0.35rem;
+    }
+    .field { margin-bottom: 1.1rem; }
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      font: inherit;
+      padding: 0.55rem 0.65rem;
+      border: 1px solid rgba(44, 36, 22, 0.15);
+      border-radius: 10px;
+      background: #fff;
+    }
+    input:focus, select:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .hint {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+    fieldset {
+      border: 1px solid rgba(44, 36, 22, 0.12);
+      border-radius: 12px;
+      margin: 0 0 1rem 0;
+      padding: 0.75rem 1rem;
+    }
+    legend {
+      font-weight: 600;
+      font-size: 0.88rem;
+      padding: 0 0.35rem;
+    }
+    .radio-row {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .radio-row label {
+      font-weight: 500;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      cursor: pointer;
+    }
+    .radio-row input { margin-top: 0.2rem; }
+    button[type="submit"] {
+      width: 100%;
+      font: inherit;
+      font-size: 1rem;
+      font-weight: 700;
+      padding: 0.75rem 1rem;
+      border: none;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      min-height: 48px;
+    }
+    button[type="submit"]:hover { background: var(--accent-hover); }
+    button[type="submit"]:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .alert {
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+      font-size: 0.95rem;
+    }
+    .alert.error {
+      background: #fde8e6;
+      color: #5c2a22;
+      border: 1px solid #f0c4be;
+    }
+    .alert.ok {
+      background: #e8f4ea;
+      color: #1e3d24;
+      border: 1px solid #b8d9be;
+    }
+    .alert a { color: var(--accent); font-weight: 600; }
+    .config-warn {
+      font-size: 0.9rem;
+      color: var(--danger);
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Bilingual Flashcard Generator</h1>
+    <p class="sub">English ↔ Vietnamese vocabulary for young learners.</p>
+
+    {% if not token_ok %}
+    <p class="config-warn">
+      <strong>GITHUB_TOKEN</strong> is missing or still set to the placeholder.
+      Add a real token to <code>.env</code> (see <code>.env.example</code>), then restart the app.
+    </p>
+    {% endif %}
+
+    {% if error %}
+    <div class="alert error"><pre style="white-space:pre-wrap;margin:0;font-family:inherit;font-size:0.9rem;">{{ error }}</pre></div>
+    {% endif %}
+
+    {% if result %}
+    <div class="alert ok">
+      <p style="margin:0 0 0.5rem 0;"><strong>Done.</strong> {{ result.cards_count }} cards.</p>
+      {% if result.count_note %}
+      <p style="margin:0 0 0.5rem 0;font-size:0.9rem;">{{ result.count_note }}</p>
+      {% endif %}
+      <p style="margin:0;">
+        <a href="{{ result.viewer_url }}" target="_blank" rel="noopener">Open interactive viewer</a>
+        ·
+        <a href="{{ result.md_url }}">Download Markdown</a>
+      </p>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <form method="post" action="{{ url_for('generate') }}" id="gen-form">
+        <div class="field">
+          <label for="theme">Theme or topic</label>
+          <input type="text" id="theme" name="theme" value="{{ form.theme }}"
+            placeholder="e.g. animals, colors, breakfast" autocomplete="off" />
+          <p class="hint">Leave blank for a general “around the home” set.</p>
+        </div>
+
+        <div class="field">
+          <label for="count">Number of cards</label>
+          <input type="number" id="count" name="count" min="1" max="40" value="{{ form.count }}" />
+        </div>
+
+        <fieldset>
+          <legend>Age band</legend>
+          <div class="radio-row">
+            <label><input type="radio" name="age" value="0" {% if form.age == '0' %}checked{% endif %} /> 2–3 years (very few words per card)</label>
+            <label><input type="radio" name="age" value="1" {% if form.age == '1' %}checked{% endif %} /> 3–5 years (preschool)</label>
+            <label><input type="radio" name="age" value="2" {% if form.age == '2' %}checked{% endif %} /> 6–8 years (early elementary)</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Images</legend>
+          <div class="radio-row">
+            <label><input type="radio" name="image_mode" value="0" {% if form.image_mode == '0' %}checked{% endif %} /> No images (text-only)</label>
+            <label><input type="radio" name="image_mode" value="1" {% if form.image_mode == '1' %}checked{% endif %} /> AI-generated (needs <code>HF_TOKEN</code> in .env)</label>
+            <label><input type="radio" name="image_mode" value="2" {% if form.image_mode == '2' %}checked{% endif %} /> Wikimedia Commons thumbnails (internet, no extra key)</label>
+          </div>
+        </fieldset>
+
+        <button type="submit" id="submit-btn" {% if not token_ok %}disabled{% endif %}>Generate flashcards</button>
+        <p class="hint" style="margin-top:0.75rem;margin-bottom:0;">Generation can take a minute or longer with images. Keep this tab open.</p>
+      </form>
+    </div>
+  </div>
+  <script>
+    document.getElementById('gen-form').addEventListener('submit', function () {
+      var b = document.getElementById('submit-btn');
+      b.disabled = true;
+      b.textContent = 'Generating…';
+    });
+  </script>
+</body>
+</html>

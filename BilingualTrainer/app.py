@@ -6,8 +6,11 @@ Uses LangChain + GitHub Models API (same pattern as StoryTime-Generator/app.py).
 Optional **Hugging Face** image generation, optional **Wikimedia Commons** thumbnails (no API key),
 or text-only cards. Writes Markdown, downloaded images under `output/`, and an interactive
 `flashcards_<run>.html` viewer (picture-first when images exist, then **Show words**).
+
+Run `python app.py` for a local web UI, or `python app.py --cli` for terminal prompts.
 """
 
+import argparse
 import asyncio
 import html
 import json
@@ -21,6 +24,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from flask import Flask, render_template, request, send_from_directory, url_for
 
 try:
     from langchain.agents import create_agent
@@ -43,10 +47,168 @@ WIKIMEDIA_CONTACT = os.getenv("WIKIMEDIA_CONTACT", "https://github.com/")
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 OUTPUT_DIR = Path(__file__).parent / "output"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+UI_TEMPLATES_DIR = Path(__file__).parent / "ui_templates"
 
 IMAGE_MODE_NONE = "0"
 IMAGE_MODE_GENERATE = "1"
 IMAGE_MODE_COMMONS = "2"
+
+AGE_MAP = {
+    "0": "2–3 years",
+    "1": "3–5 years",
+    "2": "6–8 years",
+}
+
+_agent_singleton: Any = None
+
+
+def github_token_configured() -> bool:
+    return bool(GITHUB_TOKEN and GITHUB_TOKEN != "your_github_token_here")
+
+
+def build_user_data(
+    theme: str,
+    count: int,
+    age_choice: str,
+    image_mode: str,
+) -> dict[str, Any]:
+    """Build the same structure as console `collect_user_input` from explicit fields."""
+    t = (theme or "").strip()
+    if not t:
+        t = "everyday objects around the home"
+    n = max(1, min(40, int(count)))
+    age_band = AGE_MAP.get(str(age_choice).strip(), "3–5 years")
+    im = str(image_mode).strip()
+    if im == IMAGE_MODE_GENERATE:
+        mode = IMAGE_MODE_GENERATE
+    elif im == IMAGE_MODE_COMMONS:
+        mode = IMAGE_MODE_COMMONS
+    else:
+        mode = IMAGE_MODE_NONE
+    user_message = (
+        f"Create exactly {n} bilingual vocabulary flashcards.\n"
+        f"Theme/topic: {t}\n"
+        f"Age band: {age_band}\n"
+        f"Languages: English and Vietnamese.\n"
+        f"Remember: respond with ONLY the JSON array, no other text."
+    )
+    return {
+        "theme": t,
+        "count": str(n),
+        "age_band": age_band,
+        "user_message": user_message,
+        "image_mode": mode,
+    }
+
+
+def get_or_create_agent() -> Any:
+    """Single LangChain agent for the process (web server reuses one instance)."""
+    global _agent_singleton
+    if _agent_singleton is not None:
+        return _agent_singleton
+    template_path = TEMPLATES_DIR / "flashcard_generator.json"
+    with open(template_path, "r", encoding="utf-8") as f:
+        prompt_data = json.load(f)
+        system_prompt = prompt_data.get("template", "")
+    llm = ChatOpenAI(
+        model=MODEL_NAME,
+        temperature=0.55,
+        base_url=API_ENDPOINT,
+        api_key=GITHUB_TOKEN,
+    )
+    _agent_singleton = create_agent(llm, tools=[], system_prompt=system_prompt)
+    return _agent_singleton
+
+
+async def run_flashcard_generation(user_data: dict[str, Any], agent: Any) -> dict[str, Any]:
+    """
+    Full pipeline: LLM → parse → optional images → save MD + HTML.
+    Returns a dict with ok=True and file names, or ok=False and error details.
+    """
+    response = await agent.ainvoke(
+        {"messages": [HumanMessage(content=user_data["user_message"])]}
+    )
+    last = response["messages"][-1]
+    raw_content = last.content if hasattr(last, "content") else str(last)
+
+    try:
+        cards_raw = parse_flashcard_json(raw_content)
+    except (json.JSONDecodeError, ValueError) as e:
+        return {
+            "ok": False,
+            "error": f"Could not parse flashcards JSON: {e}",
+            "debug_output": raw_content[:4000],
+        }
+
+    cards = [normalize_card(c) for c in cards_raw]
+    expected = int(user_data["count"])
+    if len(cards) != expected:
+        # Still succeed; note is informational only
+        pass
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_mode = user_data["image_mode"]
+    image_rel_paths: list[str | None] | None = None
+    image_mode_label = "No images"
+
+    if image_mode == IMAGE_MODE_GENERATE:
+        if not HF_TOKEN:
+            image_mode_label = "No images (HF_TOKEN missing)"
+        else:
+            image_mode_label = f"Generated images ({HF_IMAGE_MODEL})"
+            img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
+            paths = await asyncio.to_thread(generate_image_files, cards, img_dir)
+            prefix = f"flashcards_{run_id}_images"
+            image_rel_paths = []
+            for p in paths:
+                if p is not None:
+                    image_rel_paths.append(f"{prefix}/{p.name}")
+                else:
+                    image_rel_paths.append(None)
+
+    elif image_mode == IMAGE_MODE_COMMONS:
+        image_mode_label = "Wikimedia Commons thumbnails"
+        img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
+        paths = await asyncio.to_thread(fetch_commons_image_files, cards, img_dir)
+        prefix = f"flashcards_{run_id}_images"
+        image_rel_paths = []
+        for p in paths:
+            if p is not None:
+                image_rel_paths.append(f"{prefix}/{p.name}")
+            else:
+                image_rel_paths.append(None)
+
+    metadata = {
+        "languages": "English — Vietnamese",
+        "theme": user_data["theme"],
+        "age_band": user_data["age_band"],
+        "image_mode_label": image_mode_label,
+    }
+    title = f"Flashcards: {user_data['theme']}"
+    path = save_flashcards(
+        title,
+        cards,
+        metadata,
+        run_id=run_id,
+        image_rel_paths=image_rel_paths,
+    )
+    path_html = save_flashcards_html(
+        title,
+        cards,
+        metadata,
+        run_id=run_id,
+        image_rel_paths=image_rel_paths,
+    )
+
+    return {
+        "ok": True,
+        "cards_count": len(cards),
+        "run_id": run_id,
+        "md_name": path.name,
+        "html_name": path_html.name,
+        "requested_count": expected,
+        "actual_count": len(cards),
+    }
 
 
 def parse_flashcard_json(raw: str) -> list[dict[str, Any]]:
@@ -646,19 +808,17 @@ def save_flashcards_html(
     return filepath
 
 
-def collect_user_input() -> dict[str, str]:
+def collect_user_input() -> dict[str, Any]:
     print("\n" + "=" * 60)
     print("Bilingual Flashcard Generator (English ↔ Vietnamese)")
     print("=" * 60)
     print("\nWe'll create simple vocabulary cards for young learners.\n")
 
     theme = input("Theme or topic (e.g. animals, colors, breakfast): ").strip()
-    if not theme:
-        theme = "everyday objects around the home"
 
     count_str = input("How many cards? [default: 12]: ").strip() or "12"
     try:
-        count = max(1, min(40, int(count_str)))
+        count = int(count_str)
     except ValueError:
         count = 12
 
@@ -667,43 +827,139 @@ def collect_user_input() -> dict[str, str]:
     print("  1) 3–5 years (preschool)")
     print("  2) 6–8 years (early elementary)")
     age_choice = input("Select (0–2) [default: 1]: ").strip() or "1"
-    age_map = {
-        "0": "2–3 years",
-        "1": "3–5 years",
-        "2": "6–8 years",
-    }
-    age_band = age_map.get(age_choice, "3–5 years")
 
     print("\nImages:")
     print("  0) No images (text-only cards)")
     print("  1) AI-generated pictures (HF_TOKEN in .env; Hugging Face)")
     print("  2) Wikimedia Commons thumbnails (no extra key; internet)")
     img_choice = input("Select (0–2) [default: 0]: ").strip() or IMAGE_MODE_NONE
-    if img_choice == IMAGE_MODE_GENERATE:
-        image_mode = IMAGE_MODE_GENERATE
-    elif img_choice == IMAGE_MODE_COMMONS:
-        image_mode = IMAGE_MODE_COMMONS
-    else:
-        image_mode = IMAGE_MODE_NONE
 
-    user_message = (
-        f"Create exactly {count} bilingual vocabulary flashcards.\n"
-        f"Theme/topic: {theme}\n"
-        f"Age band: {age_band}\n"
-        f"Languages: English and Vietnamese.\n"
-        f"Remember: respond with ONLY the JSON array, no other text."
-    )
+    return build_user_data(theme, count, age_choice, img_choice)
 
+
+def default_form_state() -> dict[str, str]:
     return {
-        "theme": theme,
-        "count": str(count),
-        "age_band": age_band,
-        "user_message": user_message,
-        "image_mode": image_mode,
+        "theme": "",
+        "count": "12",
+        "age": "1",
+        "image_mode": IMAGE_MODE_NONE,
     }
 
 
-async def main() -> None:
+def create_web_app() -> Flask:
+    app = Flask(__name__, template_folder=str(UI_TEMPLATES_DIR))
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+
+    @app.route("/")
+    def index():
+        token_ok = github_token_configured()
+        return render_template(
+            "index.html",
+            token_ok=token_ok,
+            form=default_form_state(),
+            error=None,
+            result=None,
+        )
+
+    @app.route("/generate", methods=["POST"])
+    def generate():
+        token_ok = github_token_configured()
+        theme = request.form.get("theme", "")
+        try:
+            count = int(request.form.get("count") or "12")
+        except ValueError:
+            count = 12
+        age = (request.form.get("age") or "1").strip()
+        image_mode = (request.form.get("image_mode") or IMAGE_MODE_NONE).strip()
+
+        form_state = {
+            "theme": theme,
+            "count": str(max(1, min(40, count))),
+            "age": age if age in AGE_MAP else "1",
+            "image_mode": image_mode
+            if image_mode in (IMAGE_MODE_NONE, IMAGE_MODE_GENERATE, IMAGE_MODE_COMMONS)
+            else IMAGE_MODE_NONE,
+        }
+
+        if not token_ok:
+            return render_template(
+                "index.html",
+                token_ok=False,
+                form=form_state,
+                error="Configure GITHUB_TOKEN in .env first.",
+                result=None,
+            ), 400
+
+        template_path = TEMPLATES_DIR / "flashcard_generator.json"
+        if not template_path.is_file():
+            return render_template(
+                "index.html",
+                token_ok=True,
+                form=form_state,
+                error=f"Missing template: {template_path}",
+                result=None,
+            ), 500
+
+        user_data = build_user_data(
+            theme,
+            int(form_state["count"]),
+            form_state["age"],
+            form_state["image_mode"],
+        )
+
+        try:
+            agent = get_or_create_agent()
+        except Exception as e:
+            return render_template(
+                "index.html",
+                token_ok=True,
+                form=form_state,
+                error=f"Could not initialize the model client: {e}",
+                result=None,
+            ), 500
+
+        outcome = asyncio.run(run_flashcard_generation(user_data, agent))
+        if not outcome.get("ok"):
+            err = outcome.get("error", "Generation failed.")
+            dbg = outcome.get("debug_output")
+            if dbg:
+                err = f"{err}\n\n--- Model output (truncated) ---\n{dbg}"
+            return render_template(
+                "index.html",
+                token_ok=True,
+                form=form_state,
+                error=err,
+                result=None,
+            ), 422
+
+        html_name = outcome["html_name"]
+        md_name = outcome["md_name"]
+        result = {
+            "cards_count": outcome["cards_count"],
+            "viewer_url": url_for("serve_output", filename=html_name),
+            "md_url": url_for("serve_output", filename=md_name),
+        }
+        req_n = outcome.get("requested_count")
+        act_n = outcome.get("actual_count")
+        if req_n is not None and act_n is not None and req_n != act_n:
+            result["count_note"] = f"Requested {req_n} cards; model returned {act_n}."
+
+        return render_template(
+            "index.html",
+            token_ok=True,
+            form=default_form_state(),
+            error=None,
+            result=result,
+        )
+
+    @app.route("/output/<path:filename>")
+    def serve_output(filename: str):
+        return send_from_directory(OUTPUT_DIR, filename, max_age=0)
+
+    return app
+
+
+async def main_cli() -> None:
     try:
         if sys.platform == "win32":
             import io
@@ -715,112 +971,58 @@ async def main() -> None:
 
     print("\nInitializing Bilingual Flashcard Generator...")
 
-    if not GITHUB_TOKEN or GITHUB_TOKEN == "your_github_token_here":
+    if not github_token_configured():
         print("\nGITHUB_TOKEN is not configured. Add it to .env (see .env.example).")
         return
 
     template_path = TEMPLATES_DIR / "flashcard_generator.json"
-    try:
-        with open(template_path, "r", encoding="utf-8") as f:
-            prompt_data = json.load(f)
-            system_prompt = prompt_data.get("template", "")
-    except FileNotFoundError:
+    if not template_path.is_file():
         print(f"Missing template: {template_path}")
         return
 
-    llm = ChatOpenAI(
-        model=MODEL_NAME,
-        temperature=0.55,
-        base_url=API_ENDPOINT,
-        api_key=GITHUB_TOKEN,
-    )
-    agent = create_agent(llm, tools=[], system_prompt=system_prompt)
-
+    agent = get_or_create_agent()
     user_data = collect_user_input()
     print("\nGenerating flashcards (this may take a moment)...")
 
-    response = await agent.ainvoke(
-        {"messages": [HumanMessage(content=user_data["user_message"])]}
-    )
-    last = response["messages"][-1]
-    raw_content = last.content if hasattr(last, "content") else str(last)
-
-    try:
-        cards_raw = parse_flashcard_json(raw_content)
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"\nCould not parse flashcards JSON: {e}")
-        print("\n--- Model output (for debugging) ---\n")
-        print(raw_content[:4000])
+    outcome = await run_flashcard_generation(user_data, agent)
+    if not outcome.get("ok"):
+        print(f"\n{outcome.get('error', 'Generation failed.')}")
+        dbg = outcome.get("debug_output")
+        if dbg:
+            print("\n--- Model output (for debugging) ---\n")
+            print(dbg)
         return
 
-    cards = [normalize_card(c) for c in cards_raw]
-
-    expected = int(user_data["count"])
-    if len(cards) != expected:
-        print(f"Note: requested {expected} cards, got {len(cards)}.")
-
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    image_mode = user_data["image_mode"]
-    image_rel_paths: list[str | None] | None = None
-    image_mode_label = "No images"
-
-    if image_mode == IMAGE_MODE_GENERATE:
-        if not HF_TOKEN:
-            print("\nHF_TOKEN not set; skipping image generation. Add HF_TOKEN to .env for option 1.")
-            image_mode_label = "No images (HF_TOKEN missing)"
-        else:
-            image_mode_label = f"Generated images ({HF_IMAGE_MODEL})"
-            img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
-            print("\nGenerating images with Hugging Face (this may take a while)...")
-            paths = await asyncio.to_thread(generate_image_files, cards, img_dir)
-            prefix = f"flashcards_{run_id}_images"
-            image_rel_paths = []
-            for p in paths:
-                if p is not None:
-                    image_rel_paths.append(f"{prefix}/{p.name}")
-                else:
-                    image_rel_paths.append(None)
-
-    elif image_mode == IMAGE_MODE_COMMONS:
-        image_mode_label = "Wikimedia Commons thumbnails"
-        img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
-        print("\nFetching images from Wikimedia Commons (please wait)...")
-        paths = await asyncio.to_thread(fetch_commons_image_files, cards, img_dir)
-        prefix = f"flashcards_{run_id}_images"
-        image_rel_paths = []
-        for p in paths:
-            if p is not None:
-                image_rel_paths.append(f"{prefix}/{p.name}")
-            else:
-                image_rel_paths.append(None)
-
-    metadata = {
-        "languages": "English — Vietnamese",
-        "theme": user_data["theme"],
-        "age_band": user_data["age_band"],
-        "image_mode_label": image_mode_label,
-    }
-    title = f"Flashcards: {user_data['theme']}"
-    path = save_flashcards(
-        title,
-        cards,
-        metadata,
-        run_id=run_id,
-        image_rel_paths=image_rel_paths,
-    )
-    path_html = save_flashcards_html(
-        title,
-        cards,
-        metadata,
-        run_id=run_id,
-        image_rel_paths=image_rel_paths,
-    )
+    if outcome.get("requested_count") != outcome.get("actual_count"):
+        print(
+            f"Note: requested {outcome['requested_count']} cards, "
+            f"got {outcome['actual_count']}."
+        )
 
     print("\nDone.")
-    print(f"  • Cards: {len(cards)}")
-    print(f"  • Markdown: {path.name}")
-    print(f"  • Interactive: {path_html.name} (open this file in your browser)")
+    print(f"  • Cards: {outcome['cards_count']}")
+    print(f"  • Markdown: {outcome['md_name']}")
+    print(f"  • Interactive: {outcome['html_name']} (open this file in your browser)")
+
+
+def main_web(host: str, port: int) -> None:
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    app = create_web_app()
+    print(f"\nBilingual Flashcard Generator — open http://{host}:{port}/ in your browser\n")
+    app.run(host=host, port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Bilingual flashcard generator (web UI or CLI).")
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Use terminal prompts instead of the web UI.",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Bind address for the web server.")
+    parser.add_argument("--port", type=int, default=5000, help="Port for the web server.")
+    args = parser.parse_args()
+    if args.cli:
+        asyncio.run(main_cli())
+    else:
+        main_web(args.host, args.port)
