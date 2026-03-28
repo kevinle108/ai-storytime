@@ -12,8 +12,8 @@ Ways to incorporate images for young learners (pedagogy + implementation options
    test_hf_image.py) gives a consistent “picture side” for print or screen; pair with words on
    the flip side for classic dual-coding.
 
-3. **Picture-first / guess the word** — Show only the image (or emoji) first; child names the
-   word in either language before revealing text (can be done with a second HTML or print layout).
+3. **Picture-first / guess the word** — `save_flashcards_html` writes a single-page viewer: image
+   or emoji first, then **Show words** for English and Vietnamese (keyboard: arrows, Space).
 
 4. **Stock / encyclopedia** — Openverse, Wikimedia Commons, or Unsplash APIs could supply
    photos for concrete nouns; needs licensing awareness and stable URLs.
@@ -21,10 +21,12 @@ Ways to incorporate images for young learners (pedagogy + implementation options
 5. **Matching game** — Export JSON and shuffle images vs. word pairs in a small web or paper
    activity (same deck, different layout).
 
-This app implements (1) always and (2) optionally when HF_TOKEN is set and the user chooses it.
+This app implements (1) always, (2) optionally when HF_TOKEN is set and the user chooses it, and
+(3) as `output/flashcards_<run>.html` next to the Markdown export.
 """
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -151,6 +153,7 @@ def save_flashcards(
         f"- **Age band**: {metadata.get('age_band', '')}",
         f"- **Card count**: {len(cards)}",
         f"- **Images**: {metadata.get('image_mode_label', '')}",
+        f"- **Interactive viewer**: `{filename.replace('.md', '.html')}` (open in a browser)",
         "",
         "---",
         "",
@@ -200,6 +203,306 @@ def save_flashcards(
 
     filepath.write_text("\n".join(lines), encoding="utf-8")
     print(f"\nSaved flashcards to: {filepath}")
+    return filepath
+
+
+def save_flashcards_html(
+    title: str,
+    cards: list[dict[str, Any]],
+    metadata: dict[str, str],
+    *,
+    run_id: str,
+    image_rel_paths: list[str | None] | None = None,
+) -> Path:
+    """Picture-first interactive viewer: image or emoji, then reveal English / Vietnamese."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    filename = f"flashcards_{run_id}.html"
+    filepath = OUTPUT_DIR / filename
+
+    rels = image_rel_paths or [None] * len(cards)
+    payload: list[dict[str, Any]] = []
+    for i, card in enumerate(cards):
+        c = normalize_card(card)
+        rel = rels[i] if i < len(rels) else None
+        payload.append(
+            {
+                "english": c.get("english", ""),
+                "vietnamese": c.get("vietnamese", ""),
+                "hint": c.get("hint", ""),
+                "emoji": (c.get("emoji") or "").strip() or "🙂",
+                "imageUrl": rel,
+            }
+        )
+
+    data_json = json.dumps(payload, ensure_ascii=False)
+    # Avoid closing the HTML script tag if JSON text ever contains </script>
+    data_json = data_json.replace("</script>", "<\\/script>")
+
+    safe_title = html.escape(title)
+    safe_sub = html.escape(metadata.get("theme", "")) + " · " + html.escape(metadata.get("age_band", ""))
+
+    # Single-file HTML; paths are relative to this file (same folder as images/).
+    html_page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_title}</title>
+  <style>
+    :root {{
+      --bg: #fef6eb;
+      --card: #ffffff;
+      --text: #2c2416;
+      --muted: #6b5c4c;
+      --accent: #3d7ea6;
+      --accent-hover: #2f6588;
+      --radius: 20px;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem;
+    }}
+    header {{
+      text-align: center;
+      max-width: 36rem;
+      margin-bottom: 0.75rem;
+    }}
+    header h1 {{
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin: 0 0 0.25rem 0;
+      line-height: 1.3;
+    }}
+    header p {{
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }}
+    .stage {{
+      width: 100%;
+      max-width: 28rem;
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 28px rgba(44, 36, 22, 0.12);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 12rem;
+    }}
+    .visual {{
+      width: 100%;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 220px;
+    }}
+    .visual img {{
+      max-width: 100%;
+      max-height: 280px;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 12px;
+    }}
+    .visual .emoji-fallback {{
+      font-size: 6rem;
+      line-height: 1;
+      user-select: none;
+    }}
+    .hidden {{ display: none !important; }}
+    .counter {{
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-top: 0.5rem;
+    }}
+    .words {{
+      width: 100%;
+      text-align: center;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 2px dashed rgba(44, 36, 22, 0.12);
+    }}
+    .words .en {{
+      font-size: 1.75rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      margin-bottom: 0.35rem;
+    }}
+    .words .vi {{
+      font-size: 1.45rem;
+      font-weight: 600;
+      color: var(--accent);
+    }}
+    .words .hint {{
+      margin-top: 0.75rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+      font-style: italic;
+    }}
+    .controls {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      justify-content: center;
+      margin-top: 1.25rem;
+      max-width: 28rem;
+    }}
+    button {{
+      font: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 0.65rem 1.1rem;
+      border: none;
+      border-radius: 999px;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      min-height: 44px;
+      min-width: 44px;
+    }}
+    button:hover {{ background: var(--accent-hover); }}
+    button.secondary {{
+      background: #e8dfd2;
+      color: var(--text);
+    }}
+    button.secondary:hover {{ background: #ddd2c2; }}
+    button:disabled {{
+      opacity: 0.45;
+      cursor: not-allowed;
+    }}
+    .hint-start {{
+      margin-top: 0.75rem;
+      font-size: 0.95rem;
+      color: var(--muted);
+      text-align: center;
+      max-width: 24rem;
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="page-title">{safe_title}</h1>
+    <p id="page-sub">{safe_sub}</p>
+  </header>
+  <p class="hint-start">Look at the picture. What is it? Then tap <strong>Show words</strong>.</p>
+  <div class="stage" aria-live="polite">
+    <div class="visual" id="visual">
+      <img id="card-img" alt="" class="hidden" />
+      <div id="card-emoji" class="emoji-fallback hidden" aria-hidden="true"></div>
+    </div>
+    <div class="counter" id="counter"></div>
+    <div class="words hidden" id="words-block">
+      <div class="en" id="w-en"></div>
+      <div class="vi" id="w-vi"></div>
+      <div class="hint hidden" id="w-hint"></div>
+    </div>
+  </div>
+  <div class="controls">
+    <button type="button" class="secondary" id="btn-prev" aria-label="Previous card">← Back</button>
+    <button type="button" id="btn-reveal" aria-expanded="false">Show words</button>
+    <button type="button" class="secondary" id="btn-next" aria-label="Next card">Next →</button>
+  </div>
+  <script type="application/json" id="flashcards-data">{data_json}</script>
+  <script>
+(function () {{
+  const cards = JSON.parse(document.getElementById('flashcards-data').textContent);
+  let index = 0;
+  let revealed = false;
+
+  const elImg = document.getElementById('card-img');
+  const elEmoji = document.getElementById('card-emoji');
+  const elWords = document.getElementById('words-block');
+  const elHint = document.getElementById('w-hint');
+  const elReveal = document.getElementById('btn-reveal');
+  const elCounter = document.getElementById('counter');
+  const elPrev = document.getElementById('btn-prev');
+  const elNext = document.getElementById('btn-next');
+
+  function setReveal(on) {{
+    revealed = on;
+    elWords.classList.toggle('hidden', !revealed);
+    elReveal.textContent = revealed ? 'Hide words' : 'Show words';
+    elReveal.setAttribute('aria-expanded', revealed ? 'true' : 'false');
+    if (revealed) {{
+      const c = cards[index];
+      document.getElementById('w-en').textContent = c.english;
+      document.getElementById('w-vi').textContent = c.vietnamese;
+      if (c.hint) {{
+        elHint.textContent = 'Tip: ' + c.hint;
+        elHint.classList.remove('hidden');
+      }} else {{
+        elHint.textContent = '';
+        elHint.classList.add('hidden');
+      }}
+    }}
+  }}
+
+  function render() {{
+    const c = cards[index];
+    elCounter.textContent = (index + 1) + ' / ' + cards.length;
+    setReveal(revealed);
+    if (c.imageUrl) {{
+      elImg.src = c.imageUrl;
+      elImg.classList.remove('hidden');
+      elImg.alt = 'Picture for: ' + c.english;
+      elEmoji.classList.add('hidden');
+    }} else {{
+      elImg.removeAttribute('src');
+      elImg.classList.add('hidden');
+      elImg.alt = '';
+      elEmoji.textContent = c.emoji || '🙂';
+      elEmoji.classList.remove('hidden');
+    }}
+    elPrev.disabled = index <= 0;
+    elNext.disabled = index >= cards.length - 1;
+  }}
+
+  elReveal.addEventListener('click', function () {{
+    setReveal(!revealed);
+  }});
+  elPrev.addEventListener('click', function () {{
+    if (index > 0) {{
+      index--;
+      revealed = false;
+      render();
+    }}
+  }});
+  elNext.addEventListener('click', function () {{
+    if (index < cards.length - 1) {{
+      index++;
+      revealed = false;
+      render();
+    }}
+  }});
+  document.addEventListener('keydown', function (e) {{
+    if (e.key === 'ArrowLeft') elPrev.click();
+    else if (e.key === 'ArrowRight') elNext.click();
+    else if (e.key === ' ' || e.key === 'Enter') {{
+      e.preventDefault();
+      elReveal.click();
+    }}
+  }});
+
+  render();
+}})();
+  </script>
+</body>
+</html>
+"""
+
+    filepath.write_text(html_page, encoding="utf-8")
+    print(f"Saved interactive viewer: {filepath}")
     return filepath
 
 
@@ -346,10 +649,18 @@ async def main() -> None:
         run_id=run_id,
         image_rel_paths=image_rel_paths,
     )
+    path_html = save_flashcards_html(
+        title,
+        cards,
+        metadata,
+        run_id=run_id,
+        image_rel_paths=image_rel_paths,
+    )
 
     print("\nDone.")
     print(f"  • Cards: {len(cards)}")
-    print(f"  • File: {path.name}")
+    print(f"  • Markdown: {path.name}")
+    print(f"  • Interactive: {path_html.name} (open this file in your browser)")
 
 
 if __name__ == "__main__":
