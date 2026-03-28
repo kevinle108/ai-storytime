@@ -3,30 +3,9 @@ Bilingual Flashcard Generator — English ↔ Vietnamese vocabulary with optiona
 
 Uses LangChain + GitHub Models API (same pattern as StoryTime-Generator/app.py).
 
-Ways to incorporate images for young learners (pedagogy + implementation options):
-
-1. **Emoji anchors** — One emoji per word links sound/meaning to a universal symbol (fast, offline,
-   works in any Markdown viewer). Good for attention and memory for pre-readers.
-
-2. **Generated illustrations** — Optional Hugging Face text-to-image (see StoryTime-Generator
-   test_hf_image.py) gives a consistent “picture side” for print or screen; pair with words on
-   the flip side for classic dual-coding.
-
-3. **Picture-first / guess the word** — `save_flashcards_html` writes a single-page viewer: image
-   or emoji first, then **Show words** for English and Vietnamese (keyboard: arrows, Space).
-
-4. **Stock / encyclopedia** — Openverse, Wikimedia Commons, or Unsplash APIs could supply
-   photos for concrete nouns; needs licensing awareness and stable URLs.
-
-5. **Matching game** — Export JSON and shuffle images vs. word pairs in a small web or paper
-   activity (same deck, different layout).
-
-This app implements (1) always; (2) optional Hugging Face generation; optional **Wikimedia Commons**
-(no key; images are often archival); optional **Pexels** (free API key; modern stock photos); and
-`output/flashcards_<run>.html` next to Markdown.
-
-**No-key vs fresh photos:** Public-domain aggregators skew old; free stock APIs (Pexels, Unsplash,
-Pixabay) need a one-time key but return current photography.
+Optional **Hugging Face** image generation, optional **Wikimedia Commons** thumbnails (no API key),
+or text-only cards. Writes Markdown, downloaded images under `output/`, and an interactive
+`flashcards_<run>.html` viewer (picture-first when images exist, then **Show words**).
 """
 
 import asyncio
@@ -62,15 +41,12 @@ HF_IMAGE_MODEL = os.getenv("HF_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
 # Optional contact URL or email for Wikimedia User-Agent policy
 WIKIMEDIA_CONTACT = os.getenv("WIKIMEDIA_CONTACT", "https://github.com/")
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
-PEXELS_API = "https://api.pexels.com/v1/search"
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 OUTPUT_DIR = Path(__file__).parent / "output"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-IMAGE_MODE_EMOJI_ONLY = "0"
+IMAGE_MODE_NONE = "0"
 IMAGE_MODE_GENERATE = "1"
 IMAGE_MODE_COMMONS = "2"
-IMAGE_MODE_PEXELS = "3"
 
 
 def parse_flashcard_json(raw: str) -> list[dict[str, Any]]:
@@ -93,19 +69,31 @@ def parse_flashcard_json(raw: str) -> list[dict[str, Any]]:
 def normalize_card(card: dict[str, Any]) -> dict[str, Any]:
     """Ensure optional visual fields exist for older JSON."""
     out = dict(card)
-    out.setdefault("emoji", "")
+    out.pop("emoji", None)
     out.setdefault("image_prompt", "")
     return out
 
 
 def _hf_image_prompt(card: dict[str, Any]) -> str:
-    base = (card.get("image_prompt") or "").strip()
+    """Bias the model toward one clear subject and a calm background—good for toddler vocabulary."""
     en = (card.get("english") or "").strip()
+    base = (card.get("image_prompt") or "").strip()
+    subject_bit = f'"{en}"' if en else "the vocabulary word"
     if base:
-        return f"{base}. Children's book illustration, simple flat shapes, bright friendly colors, no text, no letters, no watermark."
-    return (
-        f"Simple cute illustration of {en}. Children's book style, flat colors, no text, no letters."
+        core = f"Illustration for the word {subject_bit}: {base}"
+    else:
+        core = (
+            f"Illustration for the word {subject_bit}: one clear, simple depiction of that word only."
+        )
+    style = (
+        "Show only what the word means—one main subject, centered, large in the frame. "
+        "Plain simple background (soft solid color or very light gradient), no busy scenery, "
+        "no crowds, no clutter, no extra props unless they define the word. "
+        "Flat cartoon style, bold simple shapes, thick clear outlines, bright friendly colors, "
+        "high contrast, easy for a young child to name at a glance. "
+        "No text, no letters, no watermark."
     )
+    return f"{core} {style}"
 
 
 def generate_image_files(
@@ -280,93 +268,6 @@ def fetch_commons_image_files(
     return paths
 
 
-def fetch_pexels_image_files(
-    cards: list[dict[str, Any]],
-    image_dir: Path,
-) -> list[Path | None]:
-    """
-    Download one photo per card from Pexels (modern stock photography).
-    Free API key: https://www.pexels.com/api/ — set PEXELS_API_KEY in .env
-    """
-    try:
-        import requests
-    except ImportError:
-        print("requests is not installed. Run: pip install requests")
-        return [None] * len(cards)
-
-    if not PEXELS_API_KEY:
-        print("PEXELS_API_KEY missing; cannot fetch Pexels images.")
-        return [None] * len(cards)
-
-    image_dir.mkdir(parents=True, exist_ok=True)
-    session = requests.Session()
-    session.headers.update(
-        {
-            "Authorization": PEXELS_API_KEY,
-            "User-Agent": _commons_user_agent(),
-        }
-    )
-
-    paths: list[Path | None] = []
-    delay_s = float(os.getenv("PEXELS_REQUEST_DELAY", "0.25"))
-    first_http = True
-
-    def pace() -> None:
-        nonlocal first_http
-        if first_http:
-            first_http = False
-            return
-        if delay_s > 0:
-            time.sleep(delay_s)
-
-    for i, card in enumerate(cards, start=1):
-        queries = _queries_for_card_images(normalize_card(card))
-        url: str | None = None
-        for q in queries:
-            pace()
-            try:
-                r = session.get(
-                    PEXELS_API,
-                    params={"query": q, "per_page": 1},
-                    timeout=45,
-                )
-                r.raise_for_status()
-                photos = (r.json() or {}).get("photos") or []
-                if photos:
-                    src = photos[0].get("src") or {}
-                    url = (
-                        src.get("large")
-                        or src.get("large2x")
-                        or src.get("medium")
-                        or src.get("original")
-                    )
-                    if url:
-                        break
-            except Exception as e:
-                qprev = q[:40] + ("…" if len(q) > 40 else "")
-                print(f"   Pexels search failed ({qprev}): {str(e)[:100]}")
-
-        if not url:
-            print(f"   No Pexels image for card {i}/{len(cards)} ({card.get('english', '')!r})")
-            paths.append(None)
-            continue
-
-        ext = _ext_from_url(url)
-        out_path = image_dir / f"card_{i:02d}{ext}"
-        try:
-            pace()
-            gr = session.get(url, timeout=60)
-            gr.raise_for_status()
-            out_path.write_bytes(gr.content)
-            paths.append(out_path)
-            print(f"   Card {i}/{len(cards)}: saved {out_path.name}")
-        except Exception as e:
-            print(f"   Download failed for card {i}: {str(e)[:120]}")
-            paths.append(None)
-
-    return paths
-
-
 def save_flashcards(
     title: str,
     cards: list[dict[str, Any]],
@@ -397,8 +298,8 @@ def save_flashcards(
         "",
         "## Printable flashcards",
         "",
-        "Each block is one card: **picture** (emoji and/or generated image), **English**, "
-        "**Vietnamese**. For dual-sided printing, flip on the short edge.",
+        "Each block is one card: **picture** (when available), **English**, **Vietnamese**. "
+        "For dual-sided printing, flip on the short edge.",
         "",
     ]
 
@@ -407,13 +308,9 @@ def save_flashcards(
         en = card.get("english", "")
         vi = card.get("vietnamese", "")
         hint = card.get("hint", "")
-        emoji = (card.get("emoji") or "").strip()
 
         lines.append(f"### Card {i}")
         lines.append("")
-        if emoji:
-            lines.append(f"**Visual:** {emoji}")
-            lines.append("")
         rel = rels[i - 1] if i - 1 < len(rels) else None
         if rel:
             lines.append(f"![{en}]({rel})")
@@ -452,7 +349,7 @@ def save_flashcards_html(
     run_id: str,
     image_rel_paths: list[str | None] | None = None,
 ) -> Path:
-    """Picture-first interactive viewer: image or emoji, then reveal English / Vietnamese."""
+    """Picture-first interactive viewer: image when present, then reveal English / Vietnamese."""
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = f"flashcards_{run_id}.html"
     filepath = OUTPUT_DIR / filename
@@ -467,7 +364,6 @@ def save_flashcards_html(
                 "english": c.get("english", ""),
                 "vietnamese": c.get("vietnamese", ""),
                 "hint": c.get("hint", ""),
-                "emoji": (c.get("emoji") or "").strip() or "🙂",
                 "imageUrl": rel,
             }
         )
@@ -552,10 +448,11 @@ def save_flashcards_html(
       object-fit: contain;
       border-radius: 12px;
     }}
-    .visual .emoji-fallback {{
-      font-size: 6rem;
-      line-height: 1;
-      user-select: none;
+    .visual .no-visual {{
+      font-size: 1.1rem;
+      color: var(--muted);
+      text-align: center;
+      padding: 1.5rem;
     }}
     .hidden {{ display: none !important; }}
     .counter {{
@@ -633,11 +530,11 @@ def save_flashcards_html(
     <h1 id="page-title">{safe_title}</h1>
     <p id="page-sub">{safe_sub}</p>
   </header>
-  <p class="hint-start">Look at the picture. What is it? Then tap <strong>Show words</strong>.</p>
+  <p class="hint-start">Tap <strong>Show words</strong> to reveal English and Vietnamese.</p>
   <div class="stage" aria-live="polite">
     <div class="visual" id="visual">
       <img id="card-img" alt="" class="hidden" />
-      <div id="card-emoji" class="emoji-fallback hidden" aria-hidden="true"></div>
+      <div id="card-noimg" class="no-visual hidden">No picture for this card.</div>
     </div>
     <div class="counter" id="counter"></div>
     <div class="words hidden" id="words-block">
@@ -659,7 +556,7 @@ def save_flashcards_html(
   let revealed = false;
 
   const elImg = document.getElementById('card-img');
-  const elEmoji = document.getElementById('card-emoji');
+  const elNoImg = document.getElementById('card-noimg');
   const elWords = document.getElementById('words-block');
   const elHint = document.getElementById('w-hint');
   const elReveal = document.getElementById('btn-reveal');
@@ -694,13 +591,12 @@ def save_flashcards_html(
       elImg.src = c.imageUrl;
       elImg.classList.remove('hidden');
       elImg.alt = 'Picture for: ' + c.english;
-      elEmoji.classList.add('hidden');
+      elNoImg.classList.add('hidden');
     }} else {{
       elImg.removeAttribute('src');
       elImg.classList.add('hidden');
       elImg.alt = '';
-      elEmoji.textContent = c.emoji || '🙂';
-      elEmoji.classList.remove('hidden');
+      elNoImg.classList.remove('hidden');
     }}
     elPrev.disabled = index <= 0;
     elNext.disabled = index >= cards.length - 1;
@@ -773,19 +669,16 @@ def collect_user_input() -> dict[str, str]:
     age_band = age_map.get(age_choice, "3–5 years")
 
     print("\nImages:")
-    print("  0) Emoji only (fastest)")
-    print("  1) Emoji + AI-generated pictures (HF_TOKEN in .env; Hugging Face)")
-    print("  2) Emoji + Wikimedia Commons (no extra key; often archival-looking)")
-    print("  3) Emoji + Pexels stock photos (free API key; modern photos — PEXELS_API_KEY in .env)")
-    img_choice = input("Select (0–3) [default: 0]: ").strip() or IMAGE_MODE_EMOJI_ONLY
+    print("  0) No images (text-only cards)")
+    print("  1) AI-generated pictures (HF_TOKEN in .env; Hugging Face)")
+    print("  2) Wikimedia Commons thumbnails (no extra key; internet)")
+    img_choice = input("Select (0–2) [default: 0]: ").strip() or IMAGE_MODE_NONE
     if img_choice == IMAGE_MODE_GENERATE:
         image_mode = IMAGE_MODE_GENERATE
     elif img_choice == IMAGE_MODE_COMMONS:
         image_mode = IMAGE_MODE_COMMONS
-    elif img_choice == IMAGE_MODE_PEXELS:
-        image_mode = IMAGE_MODE_PEXELS
     else:
-        image_mode = IMAGE_MODE_EMOJI_ONLY
+        image_mode = IMAGE_MODE_NONE
 
     user_message = (
         f"Create exactly {count} bilingual vocabulary flashcards.\n"
@@ -863,14 +756,14 @@ async def main() -> None:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     image_mode = user_data["image_mode"]
     image_rel_paths: list[str | None] | None = None
-    image_mode_label = "Emoji only"
+    image_mode_label = "No images"
 
     if image_mode == IMAGE_MODE_GENERATE:
         if not HF_TOKEN:
             print("\nHF_TOKEN not set; skipping image generation. Add HF_TOKEN to .env for option 1.")
-            image_mode_label = "Emoji only (HF_TOKEN missing)"
+            image_mode_label = "No images (HF_TOKEN missing)"
         else:
-            image_mode_label = f"Emoji + generated images ({HF_IMAGE_MODEL})"
+            image_mode_label = f"Generated images ({HF_IMAGE_MODEL})"
             img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
             print("\nGenerating images with Hugging Face (this may take a while)...")
             paths = await asyncio.to_thread(generate_image_files, cards, img_dir)
@@ -883,7 +776,7 @@ async def main() -> None:
                     image_rel_paths.append(None)
 
     elif image_mode == IMAGE_MODE_COMMONS:
-        image_mode_label = "Emoji + Wikimedia Commons thumbnails"
+        image_mode_label = "Wikimedia Commons thumbnails"
         img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
         print("\nFetching images from Wikimedia Commons (please wait)...")
         paths = await asyncio.to_thread(fetch_commons_image_files, cards, img_dir)
@@ -894,23 +787,6 @@ async def main() -> None:
                 image_rel_paths.append(f"{prefix}/{p.name}")
             else:
                 image_rel_paths.append(None)
-
-    elif image_mode == IMAGE_MODE_PEXELS:
-        if not PEXELS_API_KEY:
-            print("\nPEXELS_API_KEY not set; skipping Pexels. Get a free key at https://www.pexels.com/api/")
-            image_mode_label = "Emoji only (PEXELS_API_KEY missing)"
-        else:
-            image_mode_label = "Emoji + Pexels stock photos"
-            img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
-            print("\nFetching images from Pexels...")
-            paths = await asyncio.to_thread(fetch_pexels_image_files, cards, img_dir)
-            prefix = f"flashcards_{run_id}_images"
-            image_rel_paths = []
-            for p in paths:
-                if p is not None:
-                    image_rel_paths.append(f"{prefix}/{p.name}")
-                else:
-                    image_rel_paths.append(None)
 
     metadata = {
         "languages": "English — Vietnamese",
