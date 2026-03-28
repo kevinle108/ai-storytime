@@ -21,8 +21,12 @@ Ways to incorporate images for young learners (pedagogy + implementation options
 5. **Matching game** — Export JSON and shuffle images vs. word pairs in a small web or paper
    activity (same deck, different layout).
 
-This app implements (1) always, (2) optionally when HF_TOKEN is set and the user chooses it, and
-(3) as `output/flashcards_<run>.html` next to the Markdown export.
+This app implements (1) always; (2) optional Hugging Face generation; optional **Wikimedia Commons**
+(no key; images are often archival); optional **Pexels** (free API key; modern stock photos); and
+`output/flashcards_<run>.html` next to Markdown.
+
+**No-key vs fresh photos:** Public-domain aggregators skew old; free stock APIs (Pexels, Unsplash,
+Pixabay) need a one-time key but return current photography.
 """
 
 import asyncio
@@ -31,9 +35,11 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -53,11 +59,18 @@ API_ENDPOINT = os.getenv("API_ENDPOINT", "https://models.github.ai/inference")
 MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
 HF_TOKEN = os.getenv("HF_TOKEN")
 HF_IMAGE_MODEL = os.getenv("HF_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
+# Optional contact URL or email for Wikimedia User-Agent policy
+WIKIMEDIA_CONTACT = os.getenv("WIKIMEDIA_CONTACT", "https://github.com/")
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+PEXELS_API = "https://api.pexels.com/v1/search"
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 OUTPUT_DIR = Path(__file__).parent / "output"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 IMAGE_MODE_EMOJI_ONLY = "0"
 IMAGE_MODE_GENERATE = "1"
+IMAGE_MODE_COMMONS = "2"
+IMAGE_MODE_PEXELS = "3"
 
 
 def parse_flashcard_json(raw: str) -> list[dict[str, Any]]:
@@ -124,6 +137,231 @@ def generate_image_files(
             print(f"   Image {i}/{len(cards)} saved: {out_path.name}")
         except Exception as e:
             print(f"   Image {i}/{len(cards)} failed: {str(e)[:120]}")
+            paths.append(None)
+
+    return paths
+
+
+def _commons_user_agent() -> str:
+    return f"BilingualTrainer/1.0 ({WIKIMEDIA_CONTACT}; bilingual flashcards for education) Python"
+
+
+def _queries_for_card_images(card: dict[str, Any]) -> list[str]:
+    """Search phrases for Wikimedia Commons, Pexels, etc."""
+    seen: set[str] = set()
+    out: list[str] = []
+    en = (card.get("english") or "").strip()
+    if en:
+        for q in (en, en.replace("-", " ")):
+            if q and q not in seen:
+                seen.add(q)
+                out.append(q)
+        if " " in en:
+            first = en.split()[0]
+            if first not in seen:
+                seen.add(first)
+                out.append(first)
+    ip = (card.get("image_prompt") or "").strip()
+    if ip:
+        short = " ".join(ip.split()[:8])
+        if short and short not in seen:
+            seen.add(short)
+            out.append(short)
+    if not out:
+        vi = (card.get("vietnamese") or "").strip()
+        if vi:
+            out.append(vi)
+    return out
+
+
+def _ext_from_url(url: str) -> str:
+    path = urlparse(url).path
+    ext = Path(path).suffix.lower()
+    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"):
+        return ext
+    return ".jpg"
+
+
+def _commons_thumb_url(session: Any, query: str) -> str | None:
+    """Return a thumbnail URL for the first Commons file hit, or None."""
+    r = session.get(
+        COMMONS_API,
+        params={
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": query,
+            "gsrnamespace": 6,
+            "gsrlimit": 1,
+            "prop": "imageinfo",
+            "iiprop": "url",
+            "iiurlwidth": 512,
+            "format": "json",
+            "formatversion": 2,
+        },
+        timeout=45,
+    )
+    r.raise_for_status()
+    data = r.json()
+    pages = data.get("query", {}).get("pages") or []
+    for p in pages:
+        if p.get("missing"):
+            continue
+        infos = p.get("imageinfo") or []
+        if not infos:
+            continue
+        info = infos[0]
+        return info.get("thumburl") or info.get("url")
+    return None
+
+
+def fetch_commons_image_files(
+    cards: list[dict[str, Any]],
+    image_dir: Path,
+) -> list[Path | None]:
+    """
+    Download one image per card from Wikimedia Commons (search in File namespace).
+    Respects https://meta.wikimedia.org/wiki/User-Agent_policy — set WIKIMEDIA_CONTACT in .env.
+    """
+    try:
+        import requests
+    except ImportError:
+        print("requests is not installed. Run: pip install requests")
+        return [None] * len(cards)
+
+    image_dir.mkdir(parents=True, exist_ok=True)
+    headers = {"User-Agent": _commons_user_agent()}
+    session = requests.Session()
+    session.headers.update(headers)
+
+    paths: list[Path | None] = []
+    delay_s = float(os.getenv("COMMONS_REQUEST_DELAY", "0.35"))
+    first_http = True
+
+    def pace() -> None:
+        nonlocal first_http
+        if first_http:
+            first_http = False
+            return
+        if delay_s > 0:
+            time.sleep(delay_s)
+
+    for i, card in enumerate(cards, start=1):
+        queries = _queries_for_card_images(normalize_card(card))
+        thumb: str | None = None
+        for q in queries:
+            pace()
+            try:
+                thumb = _commons_thumb_url(session, q)
+            except Exception as e:
+                qprev = q[:40] + ("…" if len(q) > 40 else "")
+                print(f"   Commons search failed ({qprev}): {str(e)[:100]}")
+                thumb = None
+            if thumb:
+                break
+
+        if not thumb:
+            print(f"   No Commons image for card {i}/{len(cards)} ({card.get('english', '')!r})")
+            paths.append(None)
+            continue
+
+        ext = _ext_from_url(thumb)
+        out_path = image_dir / f"card_{i:02d}{ext}"
+        try:
+            pace()
+            gr = session.get(thumb, timeout=60)
+            gr.raise_for_status()
+            out_path.write_bytes(gr.content)
+            paths.append(out_path)
+            print(f"   Card {i}/{len(cards)}: saved {out_path.name}")
+        except Exception as e:
+            print(f"   Download failed for card {i}: {str(e)[:120]}")
+            paths.append(None)
+
+    return paths
+
+
+def fetch_pexels_image_files(
+    cards: list[dict[str, Any]],
+    image_dir: Path,
+) -> list[Path | None]:
+    """
+    Download one photo per card from Pexels (modern stock photography).
+    Free API key: https://www.pexels.com/api/ — set PEXELS_API_KEY in .env
+    """
+    try:
+        import requests
+    except ImportError:
+        print("requests is not installed. Run: pip install requests")
+        return [None] * len(cards)
+
+    if not PEXELS_API_KEY:
+        print("PEXELS_API_KEY missing; cannot fetch Pexels images.")
+        return [None] * len(cards)
+
+    image_dir.mkdir(parents=True, exist_ok=True)
+    session = requests.Session()
+    session.headers.update(
+        {
+            "Authorization": PEXELS_API_KEY,
+            "User-Agent": _commons_user_agent(),
+        }
+    )
+
+    paths: list[Path | None] = []
+    delay_s = float(os.getenv("PEXELS_REQUEST_DELAY", "0.25"))
+    first_http = True
+
+    def pace() -> None:
+        nonlocal first_http
+        if first_http:
+            first_http = False
+            return
+        if delay_s > 0:
+            time.sleep(delay_s)
+
+    for i, card in enumerate(cards, start=1):
+        queries = _queries_for_card_images(normalize_card(card))
+        url: str | None = None
+        for q in queries:
+            pace()
+            try:
+                r = session.get(
+                    PEXELS_API,
+                    params={"query": q, "per_page": 1},
+                    timeout=45,
+                )
+                r.raise_for_status()
+                photos = (r.json() or {}).get("photos") or []
+                if photos:
+                    src = photos[0].get("src") or {}
+                    url = (
+                        src.get("large")
+                        or src.get("large2x")
+                        or src.get("medium")
+                        or src.get("original")
+                    )
+                    if url:
+                        break
+            except Exception as e:
+                qprev = q[:40] + ("…" if len(q) > 40 else "")
+                print(f"   Pexels search failed ({qprev}): {str(e)[:100]}")
+
+        if not url:
+            print(f"   No Pexels image for card {i}/{len(cards)} ({card.get('english', '')!r})")
+            paths.append(None)
+            continue
+
+        ext = _ext_from_url(url)
+        out_path = image_dir / f"card_{i:02d}{ext}"
+        try:
+            pace()
+            gr = session.get(url, timeout=60)
+            gr.raise_for_status()
+            out_path.write_bytes(gr.content)
+            paths.append(out_path)
+            print(f"   Card {i}/{len(cards)}: saved {out_path.name}")
+        except Exception as e:
+            print(f"   Download failed for card {i}: {str(e)[:120]}")
             paths.append(None)
 
     return paths
@@ -535,10 +773,19 @@ def collect_user_input() -> dict[str, str]:
     age_band = age_map.get(age_choice, "3–5 years")
 
     print("\nImages:")
-    print("  0) Emoji only (fast, no Hugging Face)")
-    print("  1) Emoji + generate pictures (HF_TOKEN in .env; slower, uses API quota)")
-    img_choice = input("Select (0–1) [default: 0]: ").strip() or IMAGE_MODE_EMOJI_ONLY
-    image_mode = IMAGE_MODE_GENERATE if img_choice == IMAGE_MODE_GENERATE else IMAGE_MODE_EMOJI_ONLY
+    print("  0) Emoji only (fastest)")
+    print("  1) Emoji + AI-generated pictures (HF_TOKEN in .env; Hugging Face)")
+    print("  2) Emoji + Wikimedia Commons (no extra key; often archival-looking)")
+    print("  3) Emoji + Pexels stock photos (free API key; modern photos — PEXELS_API_KEY in .env)")
+    img_choice = input("Select (0–3) [default: 0]: ").strip() or IMAGE_MODE_EMOJI_ONLY
+    if img_choice == IMAGE_MODE_GENERATE:
+        image_mode = IMAGE_MODE_GENERATE
+    elif img_choice == IMAGE_MODE_COMMONS:
+        image_mode = IMAGE_MODE_COMMONS
+    elif img_choice == IMAGE_MODE_PEXELS:
+        image_mode = IMAGE_MODE_PEXELS
+    else:
+        image_mode = IMAGE_MODE_EMOJI_ONLY
 
     user_message = (
         f"Create exactly {count} bilingual vocabulary flashcards.\n"
@@ -627,6 +874,36 @@ async def main() -> None:
             img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
             print("\nGenerating images with Hugging Face (this may take a while)...")
             paths = await asyncio.to_thread(generate_image_files, cards, img_dir)
+            prefix = f"flashcards_{run_id}_images"
+            image_rel_paths = []
+            for p in paths:
+                if p is not None:
+                    image_rel_paths.append(f"{prefix}/{p.name}")
+                else:
+                    image_rel_paths.append(None)
+
+    elif image_mode == IMAGE_MODE_COMMONS:
+        image_mode_label = "Emoji + Wikimedia Commons thumbnails"
+        img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
+        print("\nFetching images from Wikimedia Commons (please wait)...")
+        paths = await asyncio.to_thread(fetch_commons_image_files, cards, img_dir)
+        prefix = f"flashcards_{run_id}_images"
+        image_rel_paths = []
+        for p in paths:
+            if p is not None:
+                image_rel_paths.append(f"{prefix}/{p.name}")
+            else:
+                image_rel_paths.append(None)
+
+    elif image_mode == IMAGE_MODE_PEXELS:
+        if not PEXELS_API_KEY:
+            print("\nPEXELS_API_KEY not set; skipping Pexels. Get a free key at https://www.pexels.com/api/")
+            image_mode_label = "Emoji only (PEXELS_API_KEY missing)"
+        else:
+            image_mode_label = "Emoji + Pexels stock photos"
+            img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
+            print("\nFetching images from Pexels...")
+            paths = await asyncio.to_thread(fetch_pexels_image_files, cards, img_dir)
             prefix = f"flashcards_{run_id}_images"
             image_rel_paths = []
             for p in paths:
