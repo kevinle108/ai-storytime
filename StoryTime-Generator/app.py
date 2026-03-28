@@ -44,7 +44,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Global variables for agents (will be set in main)
 story_generator_agent = None
 paginator_agent = None
-illustration_briefer_agent = None
+ascii_art_generator_agent = None
 
 # Validate GitHub Token
 if not GITHUB_TOKEN or GITHUB_TOKEN == "your_github_token_here":
@@ -61,7 +61,7 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
     story_text: str
     pages: list  # List of dicts with page_number, story_text, visual_focus
-    illustration_briefs: list  # List of dicts with page_number and brief
+    ascii_art_scenes: list  # List of dicts with page_number and ascii_art
 
 
 # ============================================================================
@@ -108,7 +108,7 @@ async def story_generator_node(state: State) -> Command[Literal["paginator", "__
     )
 
 
-async def paginator_node(state: State) -> Command[Literal["illustration_briefer", "__end__"]]:
+async def paginator_node(state: State) -> Command[Literal["ascii_art_generator", "__end__"]]:
     """
     Paginator Agent - Breaks story into 5-10 pages with visual notes
     
@@ -122,11 +122,11 @@ async def paginator_node(state: State) -> Command[Literal["illustration_briefer"
     
     if not paginator_agent:
         print("   ⚠️  Paginator agent not initialized")
-        return Command(update={"messages": state["messages"]}, goto="illustration_briefer")
+        return Command(update={"messages": state["messages"]}, goto="ascii_art_generator")
     
     if not state["story_text"]:
         print("   ⚠️  No story available")
-        return Command(update={"messages": state["messages"]}, goto="illustration_briefer")
+        return Command(update={"messages": state["messages"]}, goto="ascii_art_generator")
     
     # Add story context to the messages
     messages_with_story = state["messages"] + [
@@ -152,69 +152,68 @@ async def paginator_node(state: State) -> Command[Literal["illustration_briefer"
         print(f"   ⚠️  Failed to parse page JSON, attempting recovery...")
         pages = []
     
-    # Route to illustration briefer with pages in state
+    # Route to ASCII art generator with pages in state
     return Command(
         update={
             "messages": response["messages"],
             "pages": pages
         },
-        goto="illustration_briefer"
+        goto="ascii_art_generator"
     )
 
 
-async def illustration_briefer_node(state: State) -> Command[Literal["__end__"]]:
+async def ascii_art_generator_node(state: State) -> Command[Literal["__end__"]]:
     """
-    Illustration Briefer Agent - Creates scene descriptions for each page
+    ASCII Art Generator Agent - Creates ASCII art scenes for each page
     
     Expected to generate for each page:
-    - [SETTING] description
-    - [CHARACTERS] positioning and expressions
-    - [KEY ELEMENTS] visual items
-    - [COLOR PALETTE] suggested colors
-    - [STYLE] artistic recommendations
+    - ASCII art representation of the story scene
+    - 15-30 lines tall, 40-80 characters wide
+    - Includes main characters, setting, and key objects
+    - Readable and charming depiction of the page's visual focus
     """
-    print("\n🎨 [ILLUSTRATION BRIEFER] Creating illustration briefs...")
+    print("\n🎨 [ASCII ART GENERATOR] Creating ASCII art scenes...")
     
-    if not illustration_briefer_agent:
-        print("   ⚠️  Illustration briefer agent not initialized")
+    if not ascii_art_generator_agent:
+        print("   ⚠️  ASCII art generator agent not initialized")
         return Command(update={"messages": state["messages"]}, goto="__end__")
     
     if not state["pages"]:
         print("   ⚠️  No pages available")
         return Command(update={"messages": state["messages"]}, goto="__end__")
     
-    print(f"   Creating briefs for {len(state['pages'])} pages...")
+    print(f"   Creating ASCII art for {len(state['pages'])} pages...")
     
-    illustration_briefs = []
+    ascii_art_scenes = []
     
-    # Generate brief for each page
+    # Generate ASCII art for each page
     for page in state["pages"]:
         page_num = page.get("page_number", "?")
         story_text = page.get("story_text", "")
         visual_focus = page.get("visual_focus", "")
         
-        # Prepare context for briefer
-        brief_prompt = f"Story text: {story_text}\n\nVisual focus: {visual_focus}"
-        messages_for_brief = [HumanMessage(content=brief_prompt)]
+        # Prepare context for ASCII art generator
+        art_prompt = f"Story text: {story_text}\n\nVisual focus: {visual_focus}"
+        messages_for_art = [HumanMessage(content=art_prompt)]
         
-        # Generate brief
-        brief_response = await illustration_briefer_agent.ainvoke({"messages": messages_for_brief})
-        brief_text = brief_response["messages"][-1].content
+        # Generate ASCII art
+        art_response = await ascii_art_generator_agent.ainvoke({"messages": messages_for_art})
+        ascii_art = art_response["messages"][-1].content
         
-        illustration_briefs.append({
+        ascii_art_scenes.append({
             "page_number": page_num,
-            "brief": brief_text
+            "ascii_art": ascii_art
         })
         
-        print(f"   ✓ Brief created for page {page_num}")
+        print(f"   ✓ ASCII art created for page {page_num}")
     
-    print(f"\n   ✓ All {len(illustration_briefs)} illustration briefs generated")
+    print(f"\n   ✓ All {len(ascii_art_scenes)} ASCII art scenes generated")
     
     # Route to END
     return Command(
         update={
             "messages": state["messages"],
-            "illustration_briefs": illustration_briefs
+            "ascii_art_scenes": ascii_art_scenes
         },
         goto="__end__"
     )
@@ -235,13 +234,13 @@ def build_workflow():
     # Add nodes
     workflow.add_node("story_generator", story_generator_node)
     workflow.add_node("paginator", paginator_node)
-    workflow.add_node("illustration_briefer", illustration_briefer_node)
+    workflow.add_node("ascii_art_generator", ascii_art_generator_node)
     
     # Set entry point
     workflow.add_edge(START, "story_generator")
     
     print("   ✓ Workflow graph created")
-    print("   ✓ Nodes: [story_generator → paginator → illustration_briefer → END]")
+    print("   ✓ Nodes: [story_generator → paginator → ascii_art_generator → END]")
     
     # Compile the graph
     graph = workflow.compile()
@@ -253,7 +252,7 @@ def build_workflow():
 # ============================================================================
 
 def save_story(title: str, story_data: dict, metadata: dict) -> Path:
-    """Save generated story book with pages and illustration briefs"""
+    """Save generated story book with pages and ASCII art illustrations"""
     
     OUTPUT_DIR.mkdir(exist_ok=True)
     
@@ -264,7 +263,7 @@ def save_story(title: str, story_data: dict, metadata: dict) -> Path:
     # Extract data
     story_text = story_data.get("story_text", "")
     pages = story_data.get("pages", [])
-    illustration_briefs = story_data.get("illustration_briefs", [])
+    ascii_art_scenes = story_data.get("ascii_art_scenes", [])
     
     # Build content
     content = f"""# {title}
@@ -281,21 +280,21 @@ def save_story(title: str, story_data: dict, metadata: dict) -> Path:
 
 ---
 
-## Pages & Illustrations
+## Pages with ASCII Art Illustrations
 
 """
     
-    # Add each page with its illustration brief
+    # Add each page with its ASCII art
     for page in pages:
         page_num = page.get("page_number", "?")
         page_text = page.get("story_text", "")
         
         content += f"\n### Page {page_num}\n\n**Story Text:**\n\n{page_text}\n\n"
         
-        # Find corresponding illustration brief
-        brief_data = next((b for b in illustration_briefs if b.get("page_number") == page_num), None)
-        if brief_data:
-            content += f"**Illustration Brief:**\n\n{brief_data['brief']}\n\n"
+        # Find corresponding ASCII art
+        art_data = next((a for a in ascii_art_scenes if a.get("page_number") == page_num), None)
+        if art_data:
+            content += f"**ASCII Art Illustration:**\n\n```\n{art_data['ascii_art']}\n```\n\n"
         
         content += "---\n"
     
@@ -351,7 +350,7 @@ def collect_user_input() -> dict:
 
 async def main():
     """Main application entry point"""
-    global story_generator_agent, paginator_agent, illustration_briefer_agent
+    global story_generator_agent, paginator_agent, ascii_art_generator_agent
     
     # Ensure UTF-8 encoding for console output on Windows
     try:
@@ -387,17 +386,17 @@ async def main():
     # Load prompts from templates
     print("   Loading agent prompts...")
     try:
-        with open(TEMPLATES_DIR / "story_generator.json", "r") as f:
+        with open(TEMPLATES_DIR / "story_generator.json", "r", encoding='utf-8') as f:
             generator_data = json.load(f)
             generator_prompt = generator_data.get("template", "You are a story generator.")
         
-        with open(TEMPLATES_DIR / "paginator.json", "r") as f:
+        with open(TEMPLATES_DIR / "paginator.json", "r", encoding='utf-8') as f:
             paginator_data = json.load(f)
             paginator_prompt = paginator_data.get("template", "You are a paginator.")
         
-        with open(TEMPLATES_DIR / "illustration_briefer.json", "r") as f:
-            briefer_data = json.load(f)
-            briefer_prompt = briefer_data.get("template", "You are an illustration briefer.")
+        with open(TEMPLATES_DIR / "illustration_briefer.json", "r", encoding='utf-8') as f:
+            art_data = json.load(f)
+            art_prompt = art_data.get("template", "You are an ASCII art generator.")
         
         print("   ✓ Prompts loaded")
     except FileNotFoundError as e:
@@ -409,7 +408,7 @@ async def main():
     print("   Creating agents...")
     story_generator_agent = create_agent(llm, tools=[], system_prompt=generator_prompt)
     paginator_agent = create_agent(llm, tools=[], system_prompt=paginator_prompt)
-    illustration_briefer_agent = create_agent(llm, tools=[], system_prompt=briefer_prompt)
+    ascii_art_generator_agent = create_agent(llm, tools=[], system_prompt=art_prompt)
     print("   ✓ All agents created")
     
     # Collect user input
@@ -420,7 +419,7 @@ async def main():
         "messages": [HumanMessage(content=user_data["user_input"])],
         "story_text": "",
         "pages": [],
-        "illustration_briefs": [],
+        "ascii_art_scenes": [],
     }
     
     # Build and run workflow
@@ -450,7 +449,7 @@ async def main():
     print(f"   • Theme: {user_data['theme']}")
     print(f"   • Target Age: {user_data['age_group']}")
     print(f"   • Story Pages: {len(result.get('pages', []))}")
-    print(f"   • Illustration Briefs: {len(result.get('illustration_briefs', []))}")
+    print(f"   • ASCII Art Illustrations: {len(result.get('ascii_art_scenes', []))}")
     print(f"   • Output File: {story_file.name}")
     
     print("\n✅ All done! Your illustrated story book is ready.")
