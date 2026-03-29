@@ -5,7 +5,7 @@ Uses LangChain + GitHub Models API (same pattern as StoryTime-Generator/app.py).
 
 Optional **Hugging Face** image generation, optional **Wikimedia Commons** thumbnails (no API key),
 or text-only cards. Writes Markdown, downloaded images under `output/`, and an interactive
-`flashcards_<run>.html` viewer (picture-first when images exist, then **Show words**).
+`flashcards_<run>.html` viewer (picture-first when images exist; optional **Always show words**).
 
 Run `python app.py` for a local web UI, or `python app.py --cli` for terminal prompts.
 """
@@ -198,6 +198,7 @@ async def run_flashcard_generation(user_data: dict[str, Any], agent: Any) -> dic
         metadata,
         run_id=run_id,
         image_rel_paths=image_rel_paths,
+        always_show_words=bool(user_data.get("always_show_words")),
     )
 
     return {
@@ -516,6 +517,7 @@ def save_flashcards_html(
     *,
     run_id: str,
     image_rel_paths: list[str | None] | None = None,
+    always_show_words: bool = False,
 ) -> Path:
     """Picture-first interactive viewer: image when present, then reveal English / Vietnamese."""
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -542,6 +544,19 @@ def save_flashcards_html(
 
     safe_title = html.escape(title)
     safe_sub = html.escape(metadata.get("theme", "")) + " · " + html.escape(metadata.get("age_band", ""))
+
+    words_block_class = "words hidden" if not always_show_words else "words"
+    always_js = "true" if always_show_words else "false"
+    hint_start = (
+        "Words stay visible when you change cards. Uncheck <strong>Always show words</strong> "
+        "or tap <strong>Hide words</strong> to conceal them."
+        if always_show_words
+        else "Tap <strong>Show words</strong> to reveal English and Vietnamese. "
+        "Check <strong>Always show words</strong> to keep them visible when you move between cards."
+    )
+    reveal_btn_label = "Hide words" if always_show_words else "Show words"
+    reveal_aria = "true" if always_show_words else "false"
+    chk_checked = " checked" if always_show_words else ""
 
     # Single-file HTML; paths are relative to this file (same folder as images/).
     html_page = f"""<!DOCTYPE html>
@@ -691,6 +706,26 @@ def save_flashcards_html(
       text-align: center;
       max-width: 24rem;
     }}
+    .always-row {{
+      flex: 1 1 100%;
+      display: flex;
+      justify-content: center;
+      margin-bottom: 0.15rem;
+    }}
+    .always-row label {{
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }}
+    .always-row input {{
+      width: 1.05rem;
+      height: 1.05rem;
+      accent-color: var(--accent);
+    }}
   </style>
 </head>
 <body>
@@ -698,22 +733,25 @@ def save_flashcards_html(
     <h1 id="page-title">{safe_title}</h1>
     <p id="page-sub">{safe_sub}</p>
   </header>
-  <p class="hint-start">Tap <strong>Show words</strong> to reveal English and Vietnamese.</p>
+  <p class="hint-start">{hint_start}</p>
   <div class="stage" aria-live="polite">
     <div class="visual" id="visual">
       <img id="card-img" alt="" class="hidden" />
       <div id="card-noimg" class="no-visual hidden">No picture for this card.</div>
     </div>
     <div class="counter" id="counter"></div>
-    <div class="words hidden" id="words-block">
+    <div class="{words_block_class}" id="words-block">
       <div class="en" id="w-en"></div>
       <div class="vi" id="w-vi"></div>
       <div class="hint hidden" id="w-hint"></div>
     </div>
   </div>
   <div class="controls">
+    <div class="always-row">
+      <label><input type="checkbox" id="chk-always-words"{chk_checked} /> Always show words</label>
+    </div>
     <button type="button" class="secondary" id="btn-prev" aria-label="Previous card">← Back</button>
-    <button type="button" id="btn-reveal" aria-expanded="false">Show words</button>
+    <button type="button" id="btn-reveal" aria-expanded="{reveal_aria}">{reveal_btn_label}</button>
     <button type="button" class="secondary" id="btn-next" aria-label="Next card">Next →</button>
   </div>
   <script type="application/json" id="flashcards-data">{data_json}</script>
@@ -721,7 +759,8 @@ def save_flashcards_html(
 (function () {{
   const cards = JSON.parse(document.getElementById('flashcards-data').textContent);
   let index = 0;
-  let revealed = false;
+  let alwaysShowWords = {always_js};
+  let revealed = alwaysShowWords;
 
   const elImg = document.getElementById('card-img');
   const elNoImg = document.getElementById('card-noimg');
@@ -731,6 +770,7 @@ def save_flashcards_html(
   const elCounter = document.getElementById('counter');
   const elPrev = document.getElementById('btn-prev');
   const elNext = document.getElementById('btn-next');
+  const elAlways = document.getElementById('chk-always-words');
 
   function setReveal(on) {{
     revealed = on;
@@ -770,20 +810,29 @@ def save_flashcards_html(
     elNext.disabled = index >= cards.length - 1;
   }}
 
+  elAlways.addEventListener('change', function () {{
+    alwaysShowWords = elAlways.checked;
+    if (alwaysShowWords) {{
+      setReveal(true);
+    }} else {{
+      setReveal(false);
+    }}
+  }});
+
   elReveal.addEventListener('click', function () {{
     setReveal(!revealed);
   }});
   elPrev.addEventListener('click', function () {{
     if (index > 0) {{
       index--;
-      revealed = false;
+      revealed = alwaysShowWords;
       render();
     }}
   }});
   elNext.addEventListener('click', function () {{
     if (index < cards.length - 1) {{
       index++;
-      revealed = false;
+      revealed = alwaysShowWords;
       render();
     }}
   }});
@@ -837,12 +886,13 @@ def collect_user_input() -> dict[str, Any]:
     return build_user_data(theme, count, age_choice, img_choice)
 
 
-def default_form_state() -> dict[str, str]:
+def default_form_state() -> dict[str, Any]:
     return {
         "theme": "",
         "count": "12",
         "age": "1",
         "image_mode": IMAGE_MODE_NONE,
+        "always_show_words": False,
     }
 
 
@@ -871,6 +921,7 @@ def create_web_app() -> Flask:
             count = 12
         age = (request.form.get("age") or "1").strip()
         image_mode = (request.form.get("image_mode") or IMAGE_MODE_NONE).strip()
+        always_show_words = request.form.get("always_show_words") == "on"
 
         form_state = {
             "theme": theme,
@@ -879,6 +930,7 @@ def create_web_app() -> Flask:
             "image_mode": image_mode
             if image_mode in (IMAGE_MODE_NONE, IMAGE_MODE_GENERATE, IMAGE_MODE_COMMONS)
             else IMAGE_MODE_NONE,
+            "always_show_words": always_show_words,
         }
 
         if not token_ok:
@@ -906,6 +958,7 @@ def create_web_app() -> Flask:
             form_state["age"],
             form_state["image_mode"],
         )
+        user_data["always_show_words"] = always_show_words
 
         try:
             agent = get_or_create_agent()

@@ -199,6 +199,15 @@
           </div>
         </fieldset>
 
+        <div class="field">
+          <label style="font-weight:600;display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer;margin-bottom:0;">
+            <input type="checkbox" name="always_show_words" value="on"
+              {% if form.always_show_words %}checked{% endif %}
+              style="margin-top:0.2rem;width:1.05rem;height:1.05rem;accent-color:var(--accent);" />
+            <span>Always show words in the interactive viewer (English and Vietnamese stay visible when changing cards)</span>
+          </label>
+        </div>
+
         <button type="submit" id="submit-btn" {% if not token_ok %}disabled{% endif %}>Generate flashcards</button>
         <p class="hint" style="margin-top:0.75rem;margin-bottom:0;">Generation can take a minute or longer with images. Keep this tab open.</p>
       </form>
