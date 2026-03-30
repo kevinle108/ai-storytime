@@ -135,12 +135,36 @@
       color: var(--danger);
       margin-bottom: 1rem;
     }
+    .nav-links {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+    }
+    .nav-link {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background: var(--accent);
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    .nav-link:hover {
+      background: var(--accent-hover);
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Bilingual Flashcard Generator</h1>
     <p class="sub">English ↔ Vietnamese vocabulary for young learners.</p>
+
+    <div class="nav-links">
+      <a href="/chat" class="nav-link">🌏 Bilingual Learning Assistant</a>
+    </div>
 
     {% if not token_ok %}
     <p class="config-warn">

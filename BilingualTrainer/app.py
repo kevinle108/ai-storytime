@@ -12,6 +12,7 @@ Run `python app.py` for a local web UI, or `python app.py --cli` for terminal pr
 
 import argparse
 import asyncio
+import contextlib
 import html
 import json
 import os
@@ -20,6 +21,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -120,44 +122,90 @@ def get_or_create_agent() -> Any:
     return _agent_singleton
 
 
-async def run_flashcard_generation(user_data: dict[str, Any], agent: Any) -> dict[str, Any]:
+async def run_flashcard_generation(
+    user_data: dict[str, Any],
+    agent: Any,
+    *,
+    show_progress: bool = True,
+) -> dict[str, Any]:
     """
     Full pipeline: LLM → parse → optional images → save MD + HTML.
     Returns a dict with ok=True and file names, or ok=False and error details.
     """
-    response = await agent.ainvoke(
-        {"messages": [HumanMessage(content=user_data["user_message"])]}
+    from tqdm import tqdm
+
+    pbar_ctx = (
+        tqdm(
+            total=3,
+            desc="Generating flashcards",
+            unit="stage",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}]",
+            file=sys.stdout,
+        )
+        if show_progress
+        else contextlib.nullcontext()
     )
-    last = response["messages"][-1]
-    raw_content = last.content if hasattr(last, "content") else str(last)
 
-    try:
-        cards_raw = parse_flashcard_json(raw_content)
-    except (json.JSONDecodeError, ValueError) as e:
-        return {
-            "ok": False,
-            "error": f"Could not parse flashcards JSON: {e}",
-            "debug_output": raw_content[:4000],
-        }
+    with pbar_ctx as pbar:
+        if pbar is not None:
+            pbar.set_postfix_str("AI model")
 
-    cards = [normalize_card(c) for c in cards_raw]
-    expected = int(user_data["count"])
-    if len(cards) != expected:
-        # Still succeed; note is informational only
-        pass
+        response = await agent.ainvoke(
+            {"messages": [HumanMessage(content=user_data["user_message"])]}
+        )
+        last = response["messages"][-1]
+        raw_content = last.content if hasattr(last, "content") else str(last)
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    image_mode = user_data["image_mode"]
-    image_rel_paths: list[str | None] | None = None
-    image_mode_label = "No images"
+        try:
+            cards_raw = parse_flashcard_json(raw_content)
+        except (json.JSONDecodeError, ValueError) as e:
+            return {
+                "ok": False,
+                "error": f"Could not parse flashcards JSON: {e}",
+                "debug_output": raw_content[:4000],
+            }
 
-    if image_mode == IMAGE_MODE_GENERATE:
-        if not HF_TOKEN:
-            image_mode_label = "No images (HF_TOKEN missing)"
-        else:
-            image_mode_label = f"Generated images ({HF_IMAGE_MODEL})"
+        cards = [normalize_card(c) for c in cards_raw]
+        expected = int(user_data["count"])
+        if len(cards) != expected:
+            # Still succeed; note is informational only
+            pass
+
+        if pbar is not None:
+            pbar.update(1)
+
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_mode = user_data["image_mode"]
+        image_rel_paths: list[str | None] | None = None
+        image_mode_label = "No images"
+
+        if image_mode == IMAGE_MODE_GENERATE:
+            if not HF_TOKEN:
+                image_mode_label = "No images (HF_TOKEN missing)"
+            else:
+                image_mode_label = f"Generated images ({HF_IMAGE_MODEL})"
+                img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
+                if pbar is not None:
+                    pbar.set_postfix_str("images (HF)")
+                paths = await asyncio.to_thread(
+                    generate_image_files, cards, img_dir, show_progress=show_progress
+                )
+                prefix = f"flashcards_{run_id}_images"
+                image_rel_paths = []
+                for p in paths:
+                    if p is not None:
+                        image_rel_paths.append(f"{prefix}/{p.name}")
+                    else:
+                        image_rel_paths.append(None)
+
+        elif image_mode == IMAGE_MODE_COMMONS:
+            image_mode_label = "Wikimedia Commons thumbnails"
             img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
-            paths = await asyncio.to_thread(generate_image_files, cards, img_dir)
+            if pbar is not None:
+                pbar.set_postfix_str("images (Commons)")
+            paths = await asyncio.to_thread(
+                fetch_commons_image_files, cards, img_dir, show_progress=show_progress
+            )
             prefix = f"flashcards_{run_id}_images"
             image_rel_paths = []
             for p in paths:
@@ -166,40 +214,40 @@ async def run_flashcard_generation(user_data: dict[str, Any], agent: Any) -> dic
                 else:
                     image_rel_paths.append(None)
 
-    elif image_mode == IMAGE_MODE_COMMONS:
-        image_mode_label = "Wikimedia Commons thumbnails"
-        img_dir = OUTPUT_DIR / f"flashcards_{run_id}_images"
-        paths = await asyncio.to_thread(fetch_commons_image_files, cards, img_dir)
-        prefix = f"flashcards_{run_id}_images"
-        image_rel_paths = []
-        for p in paths:
-            if p is not None:
-                image_rel_paths.append(f"{prefix}/{p.name}")
-            else:
-                image_rel_paths.append(None)
+        if pbar is not None:
+            pbar.update(1)
 
-    metadata = {
-        "languages": "English — Vietnamese",
-        "theme": user_data["theme"],
-        "age_band": user_data["age_band"],
-        "image_mode_label": image_mode_label,
-    }
-    title = f"Flashcards: {user_data['theme']}"
-    path = save_flashcards(
-        title,
-        cards,
-        metadata,
-        run_id=run_id,
-        image_rel_paths=image_rel_paths,
-    )
-    path_html = save_flashcards_html(
-        title,
-        cards,
-        metadata,
-        run_id=run_id,
-        image_rel_paths=image_rel_paths,
-        always_show_words=bool(user_data.get("always_show_words")),
-    )
+        emit: Callable[[str], None] = tqdm.write if show_progress else print
+
+        metadata = {
+            "languages": "English — Vietnamese",
+            "theme": user_data["theme"],
+            "age_band": user_data["age_band"],
+            "image_mode_label": image_mode_label,
+        }
+        title = f"Flashcards: {user_data['theme']}"
+        if pbar is not None:
+            pbar.set_postfix_str("save files")
+        path = save_flashcards(
+            title,
+            cards,
+            metadata,
+            run_id=run_id,
+            image_rel_paths=image_rel_paths,
+            emit=emit,
+        )
+        path_html = save_flashcards_html(
+            title,
+            cards,
+            metadata,
+            run_id=run_id,
+            image_rel_paths=image_rel_paths,
+            always_show_words=bool(user_data.get("always_show_words")),
+            emit=emit,
+        )
+
+        if pbar is not None:
+            pbar.update(1)
 
     return {
         "ok": True,
@@ -268,6 +316,8 @@ def _hf_image_prompt(card: dict[str, Any]) -> str:
 def generate_image_files(
     cards: list[dict[str, Any]],
     image_dir: Path,
+    *,
+    show_progress: bool = True,
 ) -> list[Path | None]:
     """Generate one PNG per card using Hugging Face Inference. Returns parallel list of paths or None on failure."""
     try:
@@ -284,16 +334,33 @@ def generate_image_files(
     client = InferenceClient(api_key=HF_TOKEN)
     paths: list[Path | None] = []
 
-    for i, card in enumerate(cards, start=1):
+    from tqdm import tqdm
+
+    log = tqdm.write if show_progress else print
+    card_iter = (
+        tqdm(
+            enumerate(cards, start=1),
+            total=len(cards),
+            desc="HF images",
+            unit="card",
+            leave=False,
+            file=sys.stdout,
+        )
+        if show_progress
+        else enumerate(cards, start=1)
+    )
+
+    for i, card in card_iter:
         prompt = _hf_image_prompt(card)
         out_path = image_dir / f"card_{i:02d}.png"
         try:
             image = client.text_to_image(prompt=prompt, model=HF_IMAGE_MODEL)
             image.save(out_path)
             paths.append(out_path)
-            print(f"   Image {i}/{len(cards)} saved: {out_path.name}")
+            if not show_progress:
+                print(f"   Image {i}/{len(cards)} saved: {out_path.name}")
         except Exception as e:
-            print(f"   Image {i}/{len(cards)} failed: {str(e)[:120]}")
+            log(f"   Image {i}/{len(cards)} failed: {str(e)[:120]}")
             paths.append(None)
 
     return paths
@@ -374,6 +441,8 @@ def _commons_thumb_url(session: Any, query: str) -> str | None:
 def fetch_commons_image_files(
     cards: list[dict[str, Any]],
     image_dir: Path,
+    *,
+    show_progress: bool = True,
 ) -> list[Path | None]:
     """
     Download one image per card from Wikimedia Commons (search in File namespace).
@@ -394,6 +463,10 @@ def fetch_commons_image_files(
     delay_s = float(os.getenv("COMMONS_REQUEST_DELAY", "0.35"))
     first_http = True
 
+    from tqdm import tqdm
+
+    log = tqdm.write if show_progress else print
+
     def pace() -> None:
         nonlocal first_http
         if first_http:
@@ -402,7 +475,20 @@ def fetch_commons_image_files(
         if delay_s > 0:
             time.sleep(delay_s)
 
-    for i, card in enumerate(cards, start=1):
+    card_iter = (
+        tqdm(
+            enumerate(cards, start=1),
+            total=len(cards),
+            desc="Commons images",
+            unit="card",
+            leave=False,
+            file=sys.stdout,
+        )
+        if show_progress
+        else enumerate(cards, start=1)
+    )
+
+    for i, card in card_iter:
         queries = _queries_for_card_images(normalize_card(card))
         thumb: str | None = None
         for q in queries:
@@ -411,13 +497,13 @@ def fetch_commons_image_files(
                 thumb = _commons_thumb_url(session, q)
             except Exception as e:
                 qprev = q[:40] + ("…" if len(q) > 40 else "")
-                print(f"   Commons search failed ({qprev}): {str(e)[:100]}")
+                log(f"   Commons search failed ({qprev}): {str(e)[:100]}")
                 thumb = None
             if thumb:
                 break
 
         if not thumb:
-            print(f"   No Commons image for card {i}/{len(cards)} ({card.get('english', '')!r})")
+            log(f"   No Commons image for card {i}/{len(cards)} ({card.get('english', '')!r})")
             paths.append(None)
             continue
 
@@ -429,9 +515,10 @@ def fetch_commons_image_files(
             gr.raise_for_status()
             out_path.write_bytes(gr.content)
             paths.append(out_path)
-            print(f"   Card {i}/{len(cards)}: saved {out_path.name}")
+            if not show_progress:
+                print(f"   Card {i}/{len(cards)}: saved {out_path.name}")
         except Exception as e:
-            print(f"   Download failed for card {i}: {str(e)[:120]}")
+            log(f"   Download failed for card {i}: {str(e)[:120]}")
             paths.append(None)
 
     return paths
@@ -444,6 +531,7 @@ def save_flashcards(
     *,
     run_id: str,
     image_rel_paths: list[str | None] | None = None,
+    emit: Callable[[str], None] | None = None,
 ) -> Path:
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = f"flashcards_{run_id}.md"
@@ -506,7 +594,8 @@ def save_flashcards(
     )
 
     filepath.write_text("\n".join(lines), encoding="utf-8")
-    print(f"\nSaved flashcards to: {filepath}")
+    _emit = emit or print
+    _emit(f"\nSaved flashcards to: {filepath}")
     return filepath
 
 
@@ -518,6 +607,7 @@ def save_flashcards_html(
     run_id: str,
     image_rel_paths: list[str | None] | None = None,
     always_show_words: bool = False,
+    emit: Callable[[str], None] | None = None,
 ) -> Path:
     """Picture-first interactive viewer: image when present, then reveal English / Vietnamese."""
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -853,7 +943,8 @@ def save_flashcards_html(
 """
 
     filepath.write_text(html_page, encoding="utf-8")
-    print(f"Saved interactive viewer: {filepath}")
+    _emit = emit or print
+    _emit(f"Saved interactive viewer: {filepath}")
     return filepath
 
 
@@ -1009,6 +1100,83 @@ def create_web_app() -> Flask:
     def serve_output(filename: str):
         return send_from_directory(OUTPUT_DIR, filename, max_age=0)
 
+    @app.route("/chat")
+    def chat():
+        token_ok = github_token_configured()
+        if not token_ok:
+            return render_template(
+                "index.html",
+                token_ok=False,
+                form=default_form_state(),
+                error="Configure GITHUB_TOKEN in .env to use chat.",
+                result=None,
+            ), 400
+        return render_template("chat.html", token_ok=token_ok)
+
+    @app.route("/chat/message", methods=["POST"])
+    def chat_message():
+        if not github_token_configured():
+            return {"error": "GITHUB_TOKEN not configured"}, 400
+
+        data = request.get_json()
+        user_message = data.get("message", "").strip()
+        conversation_history = data.get("history", [])
+        
+        if not user_message:
+            return {"error": "Message cannot be empty"}, 400
+
+        try:
+            # System prompt for bilingual learning assistant
+            system_prompt = """You are a friendly and helpful Bilingual Learning Assistant specializing in English-Vietnamese vocabulary for young learners (ages 2-8).
+
+Your expertise includes:
+- Translating words and phrases between English and Vietnamese
+- Explaining vocabulary in simple, age-appropriate terms
+- Suggesting vocabulary themes and topics for flashcards
+- Providing cultural context and usage examples
+- Helping parents teach bilingual children
+- Offering pronunciation tips and memory techniques
+- Creating engaging explanations for children
+
+When users ask about vocabulary:
+- Provide both English and Vietnamese translations
+- Keep explanations simple and child-friendly
+- Offer example sentences when helpful
+- Suggest related words to build vocabulary
+
+When users ask about flashcard topics:
+- Suggest age-appropriate themes (animals, colors, food, family, etc.)
+- Recommend the right number of cards based on age
+- Provide tips for effective learning
+
+Always be encouraging, patient, and enthusiastic about language learning!"""
+
+            llm = ChatOpenAI(
+                model=MODEL_NAME,
+                temperature=0.7,
+                base_url=API_ENDPOINT,
+                api_key=GITHUB_TOKEN,
+            )
+            
+            # Build message history with system prompt
+            from langchain_core.messages import SystemMessage, AIMessage
+            messages: list[Any] = [SystemMessage(content=system_prompt)]
+            
+            # Add conversation history
+            for msg in conversation_history:
+                if msg.get("role") == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                elif msg.get("role") == "assistant":
+                    messages.append(AIMessage(content=msg["content"]))
+            
+            # Add current user message
+            messages.append(HumanMessage(content=user_message))
+            
+            response = llm.invoke(messages)
+            return {"response": response.content}
+        except Exception as e:
+            return {"error": f"Failed to get response: {str(e)}"}, 500
+
     return app
 
 
@@ -1035,9 +1203,7 @@ async def main_cli() -> None:
 
     agent = get_or_create_agent()
     user_data = collect_user_input()
-    print("\nGenerating flashcards (this may take a moment)...")
-
-    outcome = await run_flashcard_generation(user_data, agent)
+    outcome = await run_flashcard_generation(user_data, agent, show_progress=True)
     if not outcome.get("ok"):
         print(f"\n{outcome.get('error', 'Generation failed.')}")
         dbg = outcome.get("debug_output")
@@ -1062,7 +1228,7 @@ def main_web(host: str, port: int) -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
     app = create_web_app()
     print(f"\nBilingual Flashcard Generator — open http://{host}:{port}/ in your browser\n")
-    app.run(host=host, port=port, debug=False, threaded=True)
+    app.run(host=host, port=port, debug=True, threaded=True)
 
 
 if __name__ == "__main__":
